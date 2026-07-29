@@ -1,0 +1,17 @@
+run_name: cloud_probe
+seed: 1337
+device: cuda
+dtype: bfloat16
+model_candidates:
+  - configs/model/gpt_100m.yaml
+  - configs/model/gpt_50m.yaml
+artifact_root: ./artifacts
+compile: true
+distributed: false
+probe_tokens: 10000000
+warmup_steps: 10
+measurement_steps: 50
+projection_safety_margin: 0.20
+maximum_projected_compute_usd: 90.0
+hourly_rate_usd: null
+stage_budget_usd: 5.0

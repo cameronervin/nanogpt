@@ -1,0 +1,20 @@
+dataset_name: HuggingFaceFW/fineweb-edu
+dataset_config: sample-10BT
+# Pinned main revision observed 2026-07-29. Change only through a reviewed
+# manifest migration because source changes invalidate prepared shards.
+revision: 87f09149ef4734204d70ed1d046ddc9ca3f2b8f9
+split: train
+text_field: text
+id_field: id
+validation_fraction: 0.005
+split_seed: 20260729
+target_train_tokens: 2000000000
+tokenizer_training_characters: 1000000000
+tokenizer_vocab_size: 32768
+tokenizer_min_frequency: 2
+shard_tokens: 100000000
+storage_dtype: uint16
+insert_bos: true
+insert_eos: true
+streaming: true
+num_proc: 8

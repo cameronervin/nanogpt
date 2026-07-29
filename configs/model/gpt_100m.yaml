@@ -1,0 +1,11 @@
+vocab_size: 32768
+max_seq_len: 1024
+n_layers: 12
+d_model: 768
+n_query_heads: 12
+n_kv_heads: 4
+ffn_hidden_size: 2048
+rope_theta: 10000.0
+rms_norm_eps: 0.000001
+tie_embeddings: true
+qk_norm: true
