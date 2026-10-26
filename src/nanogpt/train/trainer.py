@@ -11,6 +11,7 @@ import contextlib
 import json
 import math
 import os
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -118,8 +119,9 @@ class Trainer:
         self.config = config
         self.model = model.to(ctx.device)
         # torch.compile wraps the forward; checkpoints always use the raw module.
+        compile_model = ctx.config.compile if config.compile is None else config.compile
         self.forward_model: nn.Module = (
-            torch.compile(self.model) if ctx.config.compile else self.model  # type: ignore[assignment]
+            torch.compile(self.model) if compile_model else self.model  # type: ignore[assignment]
         )
         self.optimizer = build_adamw(
             self.model,
@@ -278,7 +280,22 @@ class Trainer:
             },
         )
         self._saved_step = self.step
+        self._prune()
         return path
+
+    def _prune(self) -> None:
+        """Delete all but the newest ``keep_checkpoints`` committed step directories.
+
+        Runs only after a new checkpoint has been atomically committed, so the
+        stage can never be left without a resumable checkpoint.
+        """
+
+        keep = self.ctx.config.keep_checkpoints
+        if keep <= 0:
+            return
+        steps = sorted(path for path in self.directory.glob("step_*") if path.is_dir())
+        for old in steps[:-keep]:
+            shutil.rmtree(old)
 
     def _finish(self, status: Status, started: float) -> TrainResult:
         path = self._save(started)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from itertools import pairwise
 from pathlib import Path
@@ -218,3 +219,27 @@ def test_checkpoint_restores_numpy_rng(tmp_path) -> None:
     np.random.random(10)
     load_checkpoint(checkpoint, model=model, restore_rng=True)
     assert np.array_equal(np.random.random(4), expected)
+
+
+def test_retention_keeps_newest_checkpoints_and_resume_uses_latest(tmp_path) -> None:
+    ctx = _context(tmp_path, checkpoint_every=1)
+    ctx.config = dataclasses.replace(ctx.config, keep_checkpoints=2)
+    stream = _Stream()
+    trainer = _trainer(ctx, stream)
+    trainer.fit(trainer.lm_step(stream.next_batch))
+    kept = sorted(path.name for path in ctx.paths.checkpoints("base").glob("step_*"))
+    assert kept == ["step_000005", "step_000006"]
+    assert stage_status(ctx.paths, "base")["checkpoint"] == "step_000006"  # type: ignore[index]
+
+
+def test_stage_compile_overrides_run_setting(tmp_path, monkeypatch) -> None:
+    compiled: list[object] = []
+    monkeypatch.setattr(torch, "compile", lambda model: compiled.append(model) or model)
+    ctx = _context(tmp_path, compile=False)
+    ctx.config = dataclasses.replace(ctx.config, compile=True)
+    _trainer(ctx, _Stream())
+    assert compiled == []  # stage says False, run says True
+    ctx = _context(tmp_path / "b")
+    ctx.config = dataclasses.replace(ctx.config, compile=True)
+    _trainer(ctx, _Stream())
+    assert len(compiled) == 1  # stage inherits the run setting

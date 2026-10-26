@@ -8,6 +8,8 @@ device: cuda
 dtype: bfloat16
 compile: true
 deterministic: false
+# Each gpt_100m checkpoint is ~1.2 GB (weights + AdamW state); keep the newest two.
+keep_checkpoints: 2
 
 budget:
   hourly_rate_usd: null
