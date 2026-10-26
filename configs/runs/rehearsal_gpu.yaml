@@ -1,0 +1,80 @@
+# CUDA rehearsal on a cheap GPU pod: the real-data slice from rehearsal.yaml
+# with the cloud run's numerics (bf16 autocast, torch.compile, fused AdamW),
+# checkpoint retention, and an active budget guard. Base trains long enough
+# to interrupt after the step-100 checkpoint and prove resume on CUDA.
+name: rehearsal_gpu
+seed: 1337
+model: nano
+device: cuda
+dtype: bfloat16
+compile: true
+deterministic: false
+keep_checkpoints: 2
+
+budget:
+  total_usd: 5.0
+  checkpoint_reserve_seconds: 30
+
+tokenizer:
+  backend: hf
+  vocab_size: 2048
+  train_chars: 2000000
+
+data:
+  source: fineweb
+  revision: 87f09149ef4734204d70ed1d046ddc9ca3f2b8f9
+  validation_fraction: 0.005
+  shard_tokens: 500000
+  max_tokens: 2000000
+
+base:
+  max_steps: 300
+  micro_batch_size: 8
+  sequence_length: 128
+  learning_rate: 0.001
+  warmup_fraction: 0.05
+  log_every: 20
+  eval_every: 100
+  checkpoint_every: 100
+  budget_usd: 0.5
+
+sft:
+  max_steps: 20
+  micro_batch_size: 4
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  log_every: 5
+  eval_every: 10
+  checkpoint_every: 10
+  budget_usd: 0.5
+  sources:
+    - kind: smoltalk
+      revision: 5feaf2fd3ffca7c237fc38d1861bc30365d48ffa
+      subsets: [smol-magpie-ultra, smol-constraints, smol-rewrite, smol-summarize]
+      examples: 200
+      license: apache-2.0
+    - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 100, license: MIT}
+    - {kind: arithmetic, examples: 100, seed: 18001}
+
+grpo:
+  max_steps: 3
+  micro_batch_size: 2
+  learning_rate: 0.00001
+  min_lr_fraction: 1.0
+  weight_decay: 0.0
+  log_every: 1
+  budget_usd: 0.5
+  sources:
+    - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 50}
+    - {kind: arithmetic, examples: 50, seed: 28001}
+  group_size: 4
+  max_new_tokens: 32
+  pilot_prompts: 4
+  min_correct_fraction: 0.0
+  min_mixed_group_fraction: 0.0
+
+eval:
+  budget_usd: 0.5
+  validation_batches: 4
+  reasoning_prompts: 8
+  max_new_tokens: 32
