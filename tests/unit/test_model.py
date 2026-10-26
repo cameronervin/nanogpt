@@ -7,8 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from nanogpt.config import ModelConfig
-from nanogpt.inference import KVCache
-from nanogpt.model import GPT, GroupedQueryAttention, RMSNorm, RotaryEmbedding
+from nanogpt.model import GPT, GroupedQueryAttention, KVCache, RMSNorm, RotaryEmbedding
 
 
 @pytest.fixture
@@ -81,16 +80,16 @@ def test_rope_applies_the_documented_adjacent_pair_rotation() -> None:
     torch.testing.assert_close(rotated_q, expected)
 
 
-def test_forward_shapes_weight_tying_and_masked_loss(model_config: ModelConfig) -> None:
+def test_forward_shapes_weight_tying_and_ignored_targets(model_config: ModelConfig) -> None:
     torch.manual_seed(1)
     model = GPT(model_config)
     input_ids = torch.randint(0, model_config.vocab_size, (2, 6))
     targets = torch.randint(0, model_config.vocab_size, (2, 6))
-    loss_mask = torch.tensor([[0, 0, 1, 1, 1, 1], [0, 1, 1, 1, 1, 0]])
+    targets[:, :2] = -100
 
-    output = model(input_ids, targets=targets, loss_mask=loss_mask)
+    output = model(input_ids, targets=targets)
 
-    assert output.logits is not None and output.logits.shape == (2, 6, model_config.vocab_size)
+    assert output.logits.shape == (2, 6, model_config.vocab_size)
     assert output.logits.dtype == torch.float32
     assert output.loss is not None and output.loss.ndim == 0 and torch.isfinite(output.loss)
     assert model.lm_head.weight is model.token_embedding.weight
@@ -122,16 +121,13 @@ def test_all_masked_loss_is_differentiable_zero(model_config: ModelConfig) -> No
     loss.backward()
 
 
-def test_masked_loss_is_mean_over_only_selected_nonignored_tokens(
-    model_config: ModelConfig,
-) -> None:
+def test_loss_is_mean_over_only_nonignored_tokens(model_config: ModelConfig) -> None:
     model = GPT(model_config)
     input_ids = torch.randint(0, model_config.vocab_size, (1, 4))
-    targets = torch.tensor([[2, -100, 3, 4]])
-    loss_mask = torch.tensor([[True, True, False, True]])
+    targets = torch.tensor([[2, -100, -100, 4]])
 
-    output = model(input_ids, targets=targets, loss_mask=loss_mask)
-    assert output.logits is not None and output.loss is not None
+    output = model(input_ids, targets=targets)
+    assert output.loss is not None
     per_token = F.cross_entropy(
         output.logits.view(-1, model_config.vocab_size),
         targets.view(-1),
@@ -142,23 +138,11 @@ def test_masked_loss_is_mean_over_only_selected_nonignored_tokens(
     torch.testing.assert_close(output.loss, expected)
 
 
-@pytest.mark.parametrize("loss_mask", [torch.tensor([[0.0, -1.0]]), torch.tensor([[0.0, 0.5]])])
-def test_loss_mask_rejects_nonbinary_values(
-    model_config: ModelConfig, loss_mask: torch.Tensor
-) -> None:
+def test_targets_must_match_input_shape(model_config: ModelConfig) -> None:
     model = GPT(model_config)
     tokens = torch.ones((1, 2), dtype=torch.long)
-    with pytest.raises(ValueError, match="zeros or ones"):
-        model(tokens, targets=tokens, loss_mask=loss_mask)
-
-
-def test_loss_contract_rejects_silent_coercions(model_config: ModelConfig) -> None:
-    model = GPT(model_config)
-    tokens = torch.ones((1, 2), dtype=torch.long)
-    with pytest.raises(TypeError, match="targets must contain integer"):
-        model(tokens, targets=tokens.float())
-    with pytest.raises(ValueError, match="loss_mask requires targets"):
-        model(tokens, loss_mask=torch.ones_like(tokens))
+    with pytest.raises(ValueError, match="same shape"):
+        model(tokens, targets=tokens[:, :1])
 
 
 def test_logits_are_causal(model_config: ModelConfig) -> None:
@@ -171,7 +155,6 @@ def test_logits_are_causal(model_config: ModelConfig) -> None:
     first_logits = model(first).logits
     second_logits = model(second).logits
 
-    assert first_logits is not None and second_logits is not None
     assert torch.allclose(first_logits[:, :4], second_logits[:, :4], atol=1e-6, rtol=1e-5)
 
 
@@ -187,7 +170,6 @@ def test_cached_multi_token_logits_match_uncached(model_config: ModelConfig) -> 
     prefix = model(tokens[:, :3], kv_cache=cache)
     suffix = model(tokens[:, 3:], kv_cache=cache)
 
-    assert full_logits is not None and prefix.logits is not None and suffix.logits is not None
     cached_logits = torch.cat((prefix.logits, suffix.logits), dim=1)
     assert torch.allclose(cached_logits, full_logits, atol=1e-5, rtol=1e-4)
     assert cache.sequence_length == tokens.size(1)

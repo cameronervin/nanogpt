@@ -5,13 +5,18 @@ from fractions import Fraction
 import pytest
 import torch
 
-from nanogpt.training.grpo import (
+from nanogpt.config import ModelConfig
+from nanogpt.data.sources import arithmetic_prompts
+from nanogpt.model import GPT
+from nanogpt.rewards import numeric_exact_reward, parse_numeric_answer
+from nanogpt.tokenizer import ByteBPETokenizer
+from nanogpt.train.grpo import (
+    collect_rollout,
     group_advantages,
     grpo_loss,
     grpo_update,
-    numeric_exact_reward,
-    parse_numeric_answer,
     reward_density,
+    rollout_log_probs,
 )
 
 
@@ -108,3 +113,51 @@ def test_grpo_update_does_not_apply_weight_decay_to_skipped_groups() -> None:
         torch.equal(parameter, original)
         for parameter, original in zip(policy.parameters(), before, strict=True)
     )
+
+
+def test_rollout_masks_only_completion_tokens_and_reference_stays_frozen() -> None:
+    torch.manual_seed(0)
+    tokenizer = ByteBPETokenizer()
+    config = ModelConfig(
+        vocab_size=tokenizer.vocab_size,
+        max_seq_len=128,
+        n_layers=1,
+        d_model=32,
+        n_query_heads=4,
+        n_kv_heads=2,
+        ffn_hidden_size=64,
+    )
+    policy = GPT(config)
+    reference = GPT(config).requires_grad_(False)
+    prompts = list(arithmetic_prompts(2))
+    rollout = collect_rollout(
+        policy,
+        tokenizer,
+        prompts,
+        group_size=3,
+        max_new_tokens=5,
+        temperature=1.0,
+        top_k=None,
+        seed=0,
+    )
+    assert rollout.input_ids.shape[:2] == (2, 3)
+    assert rollout.rewards.shape == (2, 3)
+    assert rollout.completion_mask.shape == rollout.input_ids.shape
+    # Each row supervises between 1 and max_new_tokens completion targets.
+    per_row = rollout.completion_mask.sum(-1)
+    assert bool((per_row >= 1).all()) and bool((per_row <= 5).all())
+
+    optimizer = torch.optim.AdamW(policy.parameters(), lr=1e-3)
+    old = rollout_log_probs(policy, rollout)
+    ref = rollout_log_probs(reference, rollout)
+    grpo_update(
+        model=policy,
+        optimizer=optimizer,
+        input_ids=rollout.input_ids,
+        target_ids=rollout.target_ids,
+        old_log_probs=old,
+        reference_log_probs=ref,
+        rewards=torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 1.0]]),
+        completion_mask=rollout.completion_mask,
+    )
+    assert all(parameter.grad is None for parameter in reference.parameters())

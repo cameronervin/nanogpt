@@ -22,9 +22,8 @@ build/
 .env
 *.local.yaml
 
-# All runtime data is untracked; preserve only its policy document.
-artifacts/**
-!artifacts/README.md
+# Runtime data ($NANOGPT_HOME, default ./artifacts) is never committed.
+artifacts/
 
 # Experiment trackers and profiler traces
 wandb/

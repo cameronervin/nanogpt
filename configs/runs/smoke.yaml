@@ -1,0 +1,61 @@
+# Offline end-to-end smoke run: tiny model, fixture corpus, CPU/MPS friendly.
+# Exercises the same tokenizer -> shards -> Trainer -> GRPO rollout code as the
+# cloud run, just with toy sizes. No budget, so no --yes or rate is needed.
+name: smoke
+seed: 1337
+model: nano
+device: auto
+dtype: float32
+compile: false
+
+tokenizer:
+  backend: hf
+  vocab_size: 2048
+  train_chars: 10000000
+
+data:
+  source: fixture
+  validation_fraction: 0.1
+  shard_tokens: 4096
+
+base:
+  max_steps: 20
+  micro_batch_size: 4
+  sequence_length: 64
+  learning_rate: 0.001
+  warmup_fraction: 0.1
+  log_every: 5
+  eval_every: 10
+  checkpoint_every: 10
+
+sft:
+  max_steps: 20
+  micro_batch_size: 4
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  log_every: 5
+  eval_every: 10
+  checkpoint_every: 10
+  sources:
+    - {kind: arithmetic, examples: 256, seed: 18001}
+
+grpo:
+  max_steps: 4
+  micro_batch_size: 2            # prompts per optimizer step
+  learning_rate: 0.00001
+  min_lr_fraction: 1.0           # constant LR
+  weight_decay: 0.0
+  log_every: 1
+  sources:
+    - {kind: arithmetic, examples: 64, seed: 28001}
+  group_size: 4
+  max_new_tokens: 16
+  pilot_prompts: 4
+  # A 20-step model cannot pass the real reward-density gate.
+  min_correct_fraction: 0.0
+  min_mixed_group_fraction: 0.0
+
+eval:
+  validation_batches: 4
+  reasoning_prompts: 8
+  max_new_tokens: 16

@@ -1,0 +1,8 @@
+# Smoke-test profile: a few hundred thousand parameters, small vocab, fast on CPU/MPS.
+vocab_size: 2048
+max_seq_len: 128
+n_layers: 2
+d_model: 128
+n_query_heads: 4
+n_kv_heads: 2
+ffn_hidden_size: 352

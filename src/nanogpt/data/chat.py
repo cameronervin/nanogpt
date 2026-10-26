@@ -1,13 +1,26 @@
-"""Fixed chat rendering and assistant-only supervision masks."""
+"""Fixed chat template, assistant-only supervision, and SFT batch collation."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from .tokenizer import ByteBPETokenizer
+import torch
+from torch import Tensor
+
+from nanogpt.data.schemas import ConversationRecord
+from nanogpt.model.gpt import IGNORE_INDEX
+from nanogpt.tokenizer import Tokenizer
 
 VALID_ROLES = frozenset({"system", "user", "assistant"})
+
+
+@dataclass(frozen=True)
+class TokenBatch:
+    """Next-token batch: ``targets[b, t]`` follows ``input_ids[b, t]``; -100 is ignored."""
+
+    input_ids: Tensor
+    targets: Tensor
 
 
 @dataclass(frozen=True)
@@ -17,7 +30,7 @@ class ChatEncoding:
     input_ids: list[int]
     assistant_mask: list[bool]
 
-    def labels(self, ignore_index: int = -100) -> list[int]:
+    def labels(self, ignore_index: int = IGNORE_INDEX) -> list[int]:
         """Return next-token labels with prompt/padding positions ignored.
 
         Position ``i`` predicts token ``i+1``.  Consequently, supervision at
@@ -57,7 +70,7 @@ def render_conversation(messages: Iterable[Mapping[str, object]]) -> str:
 
 
 def encode_conversation(
-    messages: Iterable[Mapping[str, object]], tokenizer: ByteBPETokenizer
+    messages: Iterable[Mapping[str, object]], tokenizer: Tokenizer
 ) -> ChatEncoding:
     """Encode chat and mark only assistant content and terminators for loss."""
 
@@ -74,3 +87,32 @@ def encode_conversation(
         is_assistant = role == "assistant"
         mask.extend((False, *([is_assistant] * len(content_ids)), is_assistant))
     return ChatEncoding(ids, mask)
+
+
+def collate_sft(
+    records: Iterable[ConversationRecord], tokenizer: Tokenizer, *, max_seq_len: int
+) -> TokenBatch:
+    """Pad conversations into ``(input_ids, targets)`` with ``-100`` off-assistant.
+
+    Overlength records are rejected rather than truncated: cutting the target
+    could teach the model that an unfinished answer is valid.
+    """
+
+    encodings = [encode_conversation(record.messages, tokenizer) for record in records]
+    if not encodings:
+        raise ValueError("cannot collate an empty SFT batch")
+    if any(not any(item.assistant_mask) for item in encodings):
+        raise ValueError("every SFT conversation must contain assistant targets")
+    if any(len(item.input_ids) > max_seq_len + 1 for item in encodings):
+        raise ValueError("conversation exceeds max_seq_len; filter it during preparation")
+    pad_id = tokenizer.special_to_id["<|pad|>"]
+    width = max(len(item.input_ids) for item in encodings) - 1
+    inputs, targets = [], []
+    for item in encodings:
+        labels = item.labels()[:-1]
+        padding = width - len(labels)
+        inputs.append(item.input_ids[:-1] + [pad_id] * padding)
+        targets.append(labels + [IGNORE_INDEX] * padding)
+    return TokenBatch(
+        torch.tensor(inputs, dtype=torch.long), torch.tensor(targets, dtype=torch.long)
+    )

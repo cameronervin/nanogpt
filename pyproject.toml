@@ -11,18 +11,19 @@ requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Nano-GPT contributors" }]
 dependencies = [
-  "datasets>=3.6,<5",
   "numpy>=1.26,<3",
-  "pydantic>=2.10,<3",
   "pyyaml>=6.0.2,<7",
   "safetensors>=0.5,<1",
   "tokenizers>=0.21,<1",
   "torch>=2.6,<3",
-  "tqdm>=4.67,<5",
 ]
 
+[project.optional-dependencies]
+# Only needed to download FineWeb-Edu / GSM8K / SmolTalk; the smoke run is offline.
+data = ["datasets>=3.6,<5"]
+
 [project.scripts]
-nanogpt = "nanogpt.commands.cli:main"
+nanogpt = "nanogpt.cli:main"
 
 [dependency-groups]
 dev = [
@@ -43,9 +44,6 @@ extend-exclude = ["artifacts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101"]
 
 [tool.mypy]
 python_version = "3.11"
