@@ -224,6 +224,8 @@ class StageConfig:
     eval_every: int = 0
     checkpoint_every: int = 0
     budget_usd: float = 0.0
+    # Overrides the run-level ``compile`` for this stage (None = inherit).
+    compile: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -281,6 +283,8 @@ class RunConfig:
     dtype: Literal["float32", "bfloat16"] = "float32"
     compile: bool = False
     deterministic: bool = True
+    # Keep only the newest N step checkpoints per stage (0 = keep all).
+    keep_checkpoints: int = 0
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
@@ -297,6 +301,8 @@ class RunConfig:
         allocated = sum(stage.budget_usd for stage in stages)
         if allocated > total + 1e-9:
             raise ValueError(f"stage budgets (${allocated:.2f}) exceed budget.total_usd ${total}")
+        if self.keep_checkpoints < 0:
+            raise ValueError("keep_checkpoints must be >= 0")
         if self.grpo.group_size < 2:
             raise ValueError("grpo.group_size must be at least 2")
 
