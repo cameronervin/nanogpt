@@ -106,6 +106,31 @@ survives pod termination.
 Paid configs refuse to start without a rate and `--yes`. Set
 `NANOGPT_HOURLY_RATE_USD` to the pod's displayed price.
 
+**Pod notes:**
+
+- **Env vars are not inherited by SSH sessions.** RunPod sets them,
+  including secrets like `HF_TOKEN`, on the container's main process and
+  in `/etc/rp_environment`. `/workspace/env.sh` sources that file.
+- **`nproc` reports the host's CPUs, not the pod's quota.** For example, an
+  A40 pod shows 96 but is allotted about 7.65. `env.sh` caps
+  `RAYON_NUM_THREADS` and `OMP_NUM_THREADS` at `RUNPOD_CPU_COUNT`.
+- Run long jobs inside `tmux` so they survive SSH disconnects.
+
+**GPU rehearsal results** (A40, CA-MTL-1, October 2026):
+
+- bf16 + `torch.compile` work for all stages. There were 4 recompiles in
+  total, all early, so SFT/GRPO shape changes settle quickly.
+- Kill-and-resume on CUDA works: base resumed at step 100 and finished at
+  300, with elapsed time and cost carried over.
+- Real-shape probe (16×1024, accumulation 16):
+  - `gpt_100m`: about 90k tokens/s on an A40, so the 2B-token base stage
+    would take about 6.1 h and cost about $4.4 there;
+  - `gpt_50m`: about 141k tokens/s.
+
+  An H100 SXM should be about 3–4× faster than the A40.
+- CA-MTL-1 offers H100 SXM and A40 but no H100 PCIe or RTX 4090. Its
+  network volumes are high-performance only, at $0.14/GB-month.
+
 ### Before renting a GPU
 
 1. `./scripts/smoke.sh` and `uv run pytest` pass from a clean checkout.
