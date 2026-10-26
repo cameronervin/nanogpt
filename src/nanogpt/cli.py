@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -232,5 +233,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(error))
 
 
+def run() -> None:  # pragma: no cover - process-level behaviour
+    """Console entry point: run, flush, then exit without interpreter teardown.
+
+    Abandoning a Hugging Face streaming dataset part-way (we always stop at a
+    token or character budget) deadlocks pyarrow's thread-pool destructor at
+    interpreter shutdown (pyarrow 25 / datasets 4.8). All artifacts are already
+    fsynced and atomically renamed when ``main`` returns, so skipping teardown
+    is safe.
+    """
+
+    try:
+        code = main()
+    except SystemExit as exit_:
+        code = exit_.code if isinstance(exit_.code, int) else 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    run()
