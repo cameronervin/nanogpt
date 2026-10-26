@@ -1,16 +1,16 @@
 """Public model architecture API."""
 
-from nanogpt.model.attention import GroupedQueryAttention
-from nanogpt.model.block import DecoderBlock
-from nanogpt.model.gpt import GPT, ModelOutput
-from nanogpt.model.mlp import SwiGLU
-from nanogpt.model.norm import RMSNorm
-from nanogpt.model.rope import RotaryEmbedding
+from nanogpt.model.gpt import GPT, IGNORE_INDEX, DecoderBlock, ModelOutput
+from nanogpt.model.kv_cache import KVCache, LayerKVCache
+from nanogpt.model.layers import GroupedQueryAttention, RMSNorm, RotaryEmbedding, SwiGLU
 
 __all__ = [
     "GPT",
+    "IGNORE_INDEX",
     "DecoderBlock",
     "GroupedQueryAttention",
+    "KVCache",
+    "LayerKVCache",
     "ModelOutput",
     "RMSNorm",
     "RotaryEmbedding",

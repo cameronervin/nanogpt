@@ -1,1 +1,0 @@
-"""Console command implementations."""
