@@ -35,9 +35,9 @@ The dollar ceiling is a hard stop, not a target. Stage caps live in
 | --- | ---: |
 | Data + tokenizer + probe | $5 |
 | Base | $62 |
-| SFT | $8 |
-| GRPO | $17 |
-| Evaluation / retry reserve | $6 |
+| SFT | $5 |
+| GRPO | $10 |
+| Evaluation | $3 |
 | Storage (unallocated headroom) | $2 |
 
 Taxes, egress, minimum billing increments and detached storage may fall
