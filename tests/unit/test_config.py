@@ -121,7 +121,7 @@ def test_run_paths_group_artifacts_by_run(tmp_path) -> None:
     assert paths.data("base") == paths.root / "data" / "base"
 
 
-@pytest.mark.parametrize("name", ["smoke", "cloud"])
+@pytest.mark.parametrize("name", ["smoke", "cloud", "rehearsal", "rehearsal_gpu"])
 def test_checked_in_run_configs_load(name: str) -> None:
     run, model = load_run_config(CONFIGS / "runs" / f"{name}.yaml")
     assert run.name == name

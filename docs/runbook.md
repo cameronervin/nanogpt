@@ -67,6 +67,45 @@ $4 and nearly exhausts the $5 data allocation. Two ways around it:
 
 The prepared shards take about 4 GB (2 bytes per token).
 
+### RunPod setup (recommended provider)
+
+Use Secure Cloud: network volumes only work there, and the volume is what
+survives pod termination.
+
+1. Add your SSH public key under Settings → SSH Public Keys. Optionally,
+   store a Hugging Face read token as the secret `HF_TOKEN`.
+2. Create a **60 GB network volume** in a datacenter that lists H100 and a
+   cheap GPU (RTX 4090 / A40 / L40S) as available. It's billed hourly
+   (about $0.14/day); delete it after training.
+3. Deploy a cheap GPU pod in that datacenter:
+   - "Runpod PyTorch" template, TCP port 22 exposed;
+   - the volume attached at `/workspace`;
+   - env `HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}`.
+
+   Add the Connect tab's IP and port to `~/.ssh/config` as `Host nanogpt-pod`
+   with `User root` and your key.
+4. From the laptop, run `scripts/pod_sync.sh nanogpt-pod`. It copies the repo
+   as a git bundle (works while the repo is private), installs `uv`, the venv
+   and the caches onto the volume, and writes `/workspace/env.sh`.
+5. On the pod, `source /workspace/env.sh`, then run the GPU rehearsal:
+   - `nanogpt train base --config configs/runs/rehearsal_gpu.yaml --yes`;
+   - interrupt it after `step_000100` appears;
+   - `nanogpt pipeline --config configs/runs/rehearsal_gpu.yaml --yes --resume`.
+
+   This proves bf16, compile, retention and resume on CUDA.
+6. On the same pod, prepare the cloud data inside `tmux`:
+   - `nanogpt tokenizer --config configs/runs/cloud.yaml --yes`;
+   - `nanogpt prepare --config configs/runs/cloud.yaml --yes`.
+
+   Then terminate the pod.
+7. **Training:** deploy an H100 pod in the same datacenter with the same
+   volume, re-run `pod_sync.sh`, then
+   `NANOGPT_HOURLY_RATE_USD=<price> ./scripts/cloud.sh --execute`. The
+   existing tokenizer and shards are reused.
+
+Paid configs refuse to start without a rate and `--yes`. Set
+`NANOGPT_HOURLY_RATE_USD` to the pod's displayed price.
+
 ### Before renting a GPU
 
 1. `./scripts/smoke.sh` and `uv run pytest` pass from a clean checkout.
