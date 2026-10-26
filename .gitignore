@@ -20,13 +20,19 @@ build/
 
 # Secrets and local overrides
 .env
+.env.*
+!.env.example
 *.local.yaml
 
-# Runtime data ($NANOGPT_HOME, default ./artifacts) is never committed.
+# Runtime data ($NANOGPT_HOME, default ./artifacts) is never committed,
+# plus a safety net for weights, optimizer state, and shards stored elsewhere.
 artifacts/
+*.safetensors
+*.pt
+*.bin
 
-# Experiment trackers and profiler traces
-wandb/
-runs/
-tb_logs/
+# Experiment trackers and profiler traces (root-anchored: configs/runs/ is source)
+/wandb/
+/runs/
+/tb_logs/
 *.pt.trace.json
