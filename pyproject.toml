@@ -23,7 +23,7 @@ dependencies = [
 data = ["datasets>=3.6,<5"]
 
 [project.scripts]
-nanogpt = "nanogpt.cli:main"
+nanogpt = "nanogpt.cli:run"
 
 [dependency-groups]
 dev = [
