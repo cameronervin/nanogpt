@@ -92,13 +92,19 @@ def prepare_shards(
     def train_tokens() -> int:
         return sum(info.tokens for info in shards if info.split == "train") + len(buffers["train"])
 
+    def budget_spent() -> bool:
+        return max_tokens is not None and train_tokens() >= max_tokens
+
     try:
         for batch in _batched(records, encode_batch_size):
-            if max_tokens is not None and train_tokens() >= max_tokens:
+            if budget_spent():
                 break
             for record, ids in zip(
                 batch, tokenizer.encode_batch(r.text for r in batch), strict=True
             ):
+                # Whole documents only: stop at the first one past the budget.
+                if budget_spent():
+                    break
                 revisions.add(record.source_revision)
                 documents += 1
                 split = assign_split(record.id, validation_fraction)

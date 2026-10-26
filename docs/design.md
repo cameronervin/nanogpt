@@ -91,11 +91,16 @@ written as little-endian `uint16` shards with per-shard checksums.
 them, packs `[B, T]` batches, wraps into new epochs, and keeps a
 `{epoch, shard, offset}` cursor in every checkpoint for exact resume.
 
-**SFT:** the mixture comes from `sft.sources`: allowlisted SmolTalk subsets,
-GSM8K train buckets 0–5 and synthetic arithmetic. Each source contributes up
-to `examples` conversations. Conversations longer than the context are
-rejected, not truncated, and counted in the manifest. The chat template is
-fixed:
+**SFT:** the mixture comes from `sft.sources`: allowlisted SmolTalk subsets
+(streamed and interleaved so `examples` is split evenly across them), GSM8K
+train buckets 0–5 and synthetic arithmetic. GSM8K replies are the worked
+solution, with the `<<…>>` calculator traces removed, followed by
+`<final>answer</final>`.
+
+A conversation longer than the context keeps its longest prefix of whole
+turns that ends on an assistant reply. If even the first exchange does not
+fit, it is rejected. Assistant replies are never cut. The manifest counts
+shortened and rejected conversations. The chat template is fixed:
 
 ```text
 <|bos|><|system|>…<|end|><|user|>…<|end|><|assistant|>…<|end|>
@@ -105,8 +110,9 @@ Only assistant content and its `<|end|>` are targets, so the model learns
 both the answer and when to stop.
 
 **GRPO:** prompts come only from sources with verifiable numeric answers:
-GSM8K train buckets 6–9 and synthetic arithmetic. The GSM8K test split is
-evaluation-only.
+GSM8K train buckets 6–9 and synthetic arithmetic. Prompts that leave less
+than `max_new_tokens` of context are dropped during preparation. The GSM8K
+test split is evaluation-only.
 
 ### Sources and licenses
 

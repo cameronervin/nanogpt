@@ -12,6 +12,20 @@ Artifacts go to `$NANOGPT_HOME/runs/smoke/` (default `./artifacts`). Run it
 again and finished stages are skipped. Delete the run directory to start
 over.
 
+## Real-data rehearsal
+
+Before renting a GPU, run the cloud recipe's real sources on a tiny slice with
+the nano model. It takes a few minutes and is free:
+
+```bash
+uv sync --dev --extra data
+NANOGPT_HOME=/tmp/nanogpt uv run nanogpt pipeline --config configs/runs/rehearsal.yaml
+```
+
+This exercises the FineWeb, GSM8K and SmolTalk adapters at their pinned
+revisions. Setting `HF_TOKEN` raises Hugging Face rate limits. Delete the
+directory afterwards.
+
 ## Sub-$100 cloud run
 
 The dollar ceiling is a hard stop, not a target. Stage caps live in
@@ -29,6 +43,29 @@ The dollar ceiling is a hard stop, not a target. Stage caps live in
 Taxes, egress, minimum billing increments and detached storage may fall
 outside a provider's GPU price. Check them before launch and lower the caps
 if needed.
+
+### Data preparation cost
+
+The rehearsal measured on an 8-core M1:
+
+- FineWeb streams at about 4,900 docs/s, so the network is not the
+  bottleneck.
+- Training a 32k tokenizer on 50M characters took 26 s.
+- Shard preparation runs at about 455k tokens/s (FineWeb-Edu averages about
+  1,040 tokens per document with a 32k vocab). Byte-level BPE encoding is the
+  bottleneck.
+
+At that rate, 2B tokens take about 75 minutes, and the 1B-character tokenizer
+sample takes roughly another 10. On the GPU instance at $3/h that is about
+$4 and nearly exhausts the $5 data allocation. Two ways around it:
+
+- **Preferred:** run `nanogpt tokenizer` and `nanogpt prepare` on a cheap
+  CPU instance with many cores, attached to the same persistent volume, then
+  start the GPU instance for training.
+- If you prepare on the GPU box, first check its encode rate on a slice and
+  lower `data.max_tokens` if the projection does not fit.
+
+The prepared shards take about 4 GB (2 bytes per token).
 
 ### Before renting a GPU
 

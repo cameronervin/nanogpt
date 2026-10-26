@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import random
+import re
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from nanogpt.config import SourceConfig
@@ -137,23 +139,67 @@ def stream_fineweb(*, revision: str | None, split: str = "train") -> Iterator[Fi
         yield FineWebRecord(record_id, text, revision)
 
 
-def _gsm8k_rows(source: SourceConfig, partition: str) -> Iterator[tuple[str, str, str]]:
-    """Yield ``(id, question, final_answer)`` for one stable GSM8K partition."""
+_CALCULATOR = re.compile(r"<<[^<>]*>>")
+
+
+@dataclass(frozen=True)
+class GSM8KProblem:
+    id: str
+    question: str
+    solution: str  # worked reasoning without the final "#### answer" line
+    answer: str
+
+
+def parse_gsm8k(index: int, row: dict[str, Any]) -> GSM8KProblem:
+    """Split a GSM8K row into reasoning and final answer.
+
+    Answers end with ``#### <number>``; the ``<<48/2=24>>`` calculator
+    annotations are tool traces, not text the model should learn to emit.
+    """
+
+    reasoning, marker, final = str(row["answer"]).rpartition("####")
+    if not marker or not final.strip():
+        raise ValueError(f"GSM8K row {index} has no '#### answer' line")
+    return GSM8KProblem(
+        id=f"gsm8k-train-{index}",
+        question=str(row["question"]).strip(),
+        solution=_CALCULATOR.sub("", reasoning).strip(),
+        answer=final.strip().replace(",", ""),
+    )
+
+
+def _gsm8k_problems(source: SourceConfig, partition: str) -> Iterator[GSM8KProblem]:
+    """Yield problems from one stable GSM8K train partition (test is eval-only)."""
 
     dataset = _load_dataset(GSM8K_ID, "main", split="train", revision=source.revision)
     for index, row in enumerate(dataset):
-        record_id = f"gsm8k-train-{index}"
-        if gsm8k_partition(record_id) == partition:
-            answer = str(row["answer"]).rsplit("####", 1)[-1].strip().replace(",", "")
-            yield record_id, str(row["question"]), answer
+        if gsm8k_partition(f"gsm8k-train-{index}") == partition:
+            yield parse_gsm8k(index, row)
+
+
+def _smoltalk_rows(source: SourceConfig, subset: str) -> Iterator[dict[str, Any]]:
+    # Streaming: the full subsets are far larger than the slice a run uses.
+    yield from _load_dataset(
+        SMOLTALK_ID, subset, split="train", revision=source.revision, streaming=True
+    )
 
 
 def _smoltalk_conversations(source: SourceConfig) -> Iterator[ConversationRecord]:
+    """Interleave the configured subsets so ``examples`` is split evenly across them."""
+
     if not source.license:
         raise ValueError("smoltalk sources must declare the allowlisted license")
-    for subset in source.subsets:
-        dataset = _load_dataset(SMOLTALK_ID, subset, split="train", revision=source.revision)
-        for index, row in enumerate(dataset):
+    if not source.subsets:
+        raise ValueError("smoltalk sources must list at least one subset")
+    streams = [(subset, enumerate(_smoltalk_rows(source, subset))) for subset in source.subsets]
+    while streams:
+        for entry in list(streams):
+            subset, rows = entry
+            item = next(rows, None)
+            if item is None:
+                streams.remove(entry)
+                continue
+            index, row = item
             yield ConversationRecord.from_mapping(
                 {
                     "id": f"smoltalk-{subset}-{index}",
@@ -175,15 +221,18 @@ def conversations(sources: Iterable[SourceConfig]) -> list[ConversationRecord]:
         elif source.kind == "gsm8k":
             stream = (
                 ConversationRecord(
-                    id=record_id,
+                    id=problem.id,
                     messages=(
-                        {"role": "user", "content": f"{question} {ANSWER_INSTRUCTION}"},
-                        {"role": "assistant", "content": f"<final>{answer}</final>"},
+                        {"role": "user", "content": f"{problem.question} {ANSWER_INSTRUCTION}"},
+                        {
+                            "role": "assistant",
+                            "content": f"{problem.solution}\n<final>{problem.answer}</final>",
+                        },
                     ),
                     source=GSM8K_ID,
                     license=source.license or "MIT",
                 )
-                for record_id, question, answer in _gsm8k_rows(source, "sft")
+                for problem in _gsm8k_problems(source, "sft")
             )
         else:
             stream = _smoltalk_conversations(source)
@@ -203,11 +252,13 @@ def prompts(sources: Iterable[SourceConfig]) -> list[GRPOPrompt]:
         elif source.kind == "gsm8k":
             stream = (
                 GRPOPrompt(
-                    id=record_id,
-                    messages=({"role": "user", "content": f"{question} {ANSWER_INSTRUCTION}"},),
-                    answer=answer,
+                    id=problem.id,
+                    messages=(
+                        {"role": "user", "content": f"{problem.question} {ANSWER_INSTRUCTION}"},
+                    ),
+                    answer=problem.answer,
                 )
-                for record_id, question, answer in _gsm8k_rows(source, "grpo")
+                for problem in _gsm8k_problems(source, "grpo")
             )
         else:
             raise ValueError("GRPO sources must have verifiable answers (arithmetic or gsm8k)")

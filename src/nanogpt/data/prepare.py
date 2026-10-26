@@ -11,13 +11,14 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Iterator
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nanogpt.data.chat import encode_conversation
-from nanogpt.data.schemas import FineWebRecord
+from nanogpt.data.schemas import ConversationRecord, FineWebRecord
 from nanogpt.data.shards import prepare_shards
 from nanogpt.data.sources import (
     assign_split,
@@ -26,6 +27,7 @@ from nanogpt.data.sources import (
     prompts,
     stream_fineweb,
 )
+from nanogpt.generate import chat_prompt_ids
 from nanogpt.tokenizer import Tokenizer, load_tokenizer, train_tokenizer
 
 if TYPE_CHECKING:
@@ -70,6 +72,26 @@ def build_tokenizer(ctx: RunContext) -> Tokenizer:
     return tokenizer
 
 
+def fit_conversation(
+    record: ConversationRecord, tokenizer: Tokenizer, limit: int
+) -> ConversationRecord | None:
+    """Keep the longest prefix of whole turns, ending on an assistant reply, that fits.
+
+    Long multi-turn chats (most of SmolTalk's magpie-ultra subset at 1,024
+    tokens) keep their early exchanges instead of being discarded. An
+    assistant reply itself is never cut, so the model never learns that an
+    unfinished answer ends with ``<|end|>``.
+    """
+
+    messages = record.messages
+    for end in range(len(messages), 0, -1):
+        if messages[end - 1]["role"] != "assistant":
+            continue
+        if len(encode_conversation(messages[:end], tokenizer).input_ids) <= limit:
+            return record if end == len(messages) else replace(record, messages=messages[:end])
+    return None
+
+
 def _write_jsonl_dir(
     destination: Path, files: dict[str, list[Any]], manifest: dict[str, Any]
 ) -> None:
@@ -95,6 +117,7 @@ def prepare_data(ctx: RunContext) -> dict[str, Any]:
     summary: dict[str, Any] = {}
 
     base_dir = ctx.paths.data("base")
+    started = time.monotonic()
     if not base_dir.exists():
         prepare_shards(
             documents(ctx),
@@ -104,18 +127,24 @@ def prepare_data(ctx: RunContext) -> dict[str, Any]:
             validation_fraction=config.data.validation_fraction,
             max_tokens=config.data.max_tokens,
         )
-    summary["base"] = json.loads((base_dir / "manifest.json").read_text())["token_count"]
+    base_manifest = json.loads((base_dir / "manifest.json").read_text())
+    summary["base"] = {
+        "documents": base_manifest["documents"],
+        "tokens": base_manifest["token_count"],
+        "seconds": round(time.monotonic() - started, 1),
+    }
 
     sft_dir = ctx.paths.data("sft")
     if not sft_dir.exists():
         limit = ctx.model_config.max_seq_len + 1
-        kept, rejected = [], 0
+        kept, rejected, shortened = [], 0, 0
         for record in conversations(config.sft.sources):
-            # Reject (never truncate) conversations that do not fit the context.
-            if len(encode_conversation(record.messages, tokenizer).input_ids) > limit:
+            fitted = fit_conversation(record, tokenizer, limit)
+            if fitted is None:
                 rejected += 1
-            else:
-                kept.append(record)
+                continue
+            shortened += fitted is not record
+            kept.append(fitted)
         splits: dict[str, list[Any]] = {"train.jsonl": [], "validation.jsonl": []}
         for record in kept:
             split = assign_split(record.id, SFT_VALIDATION_FRACTION)
@@ -128,6 +157,7 @@ def prepare_data(ctx: RunContext) -> dict[str, Any]:
                 "train": len(splits["train.jsonl"]),
                 "validation": len(splits["validation.jsonl"]),
                 "rejected_overlength": rejected,
+                "shortened_to_fit": shortened,
                 "sources": [asdict(source) for source in config.sft.sources],
             },
         )
@@ -135,11 +165,25 @@ def prepare_data(ctx: RunContext) -> dict[str, Any]:
 
     grpo_dir = ctx.paths.data("grpo")
     if not grpo_dir.exists():
-        records = prompts(config.grpo.sources)
+        # A rollout needs the prompt plus room for a full-length completion.
+        room = ctx.model_config.max_seq_len - config.grpo.max_new_tokens
+        if room <= 0:
+            raise ValueError("grpo.max_new_tokens leaves no room for a prompt in max_seq_len")
+        fitting, too_long = [], 0
+        for prompt in prompts(config.grpo.sources):
+            if len(chat_prompt_ids(prompt.messages, tokenizer)) > room:
+                too_long += 1
+            else:
+                fitting.append(prompt)
         _write_jsonl_dir(
             grpo_dir,
-            {"train.jsonl": records},
-            {"train": len(records), "sources": [asdict(s) for s in config.grpo.sources]},
+            {"train.jsonl": fitting},
+            {
+                "tokenizer_sha256": tokenizer.sha256,
+                "train": len(fitting),
+                "rejected_overlength": too_long,
+                "sources": [asdict(s) for s in config.grpo.sources],
+            },
         )
     summary["grpo"] = json.loads((grpo_dir / "manifest.json").read_text())["train"]
     return summary
