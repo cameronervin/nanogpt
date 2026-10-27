@@ -76,7 +76,7 @@ sft:
     - {kind: arithmetic, examples: 4000, seed: 18001, answer_format: carry}
 
 grpo:
-  max_steps: 300
+  max_steps: 150                 # lr 1e-6 sweep: 34% -> 43.5% held-out in 60 steps at ~44 s/step
   micro_batch_size: 64           # prompts per optimizer step; 16 was too noisy
   learning_rate: 0.000001
   min_lr_fraction: 1.0
@@ -94,14 +94,15 @@ grpo:
   group_size: 8
   temperature: 0.8
   top_k: 50
-  max_new_tokens: 256
+  max_new_tokens: 96             # carry answers for 2-digit sums are ~50 tokens
   ratio_clip_epsilon: 0.2
   reference_kl_beta: 0.02
   pilot_prompts: 128
   min_correct_fraction: 0.05
   min_mixed_group_fraction: 0.2
-  # 16 prompts x 8 samples x ~500 tokens of 32k-vocab logits in one pass OOMed a 44 GB A40.
-  update_chunk_prompts: 4
+  # 16 prompts x 8 samples x ~500 tokens of 32k-vocab logits in one pass OOMed a 44 GB A40;
+  # at 96 new tokens 16 fits.
+  update_chunk_prompts: 16
 
 eval:
   validation_batches: 50
