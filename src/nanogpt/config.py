@@ -247,6 +247,8 @@ class BaseStageConfig(StageConfig):
 @dataclass(frozen=True)
 class SFTStageConfig(StageConfig):
     sources: list[SourceConfig] = field(default_factory=list)
+    # Held-out 2-digit arithmetic prompts scored greedily at every eval.
+    eval_prompts: int = 0
 
 
 @dataclass(frozen=True)
@@ -265,6 +267,8 @@ class GRPOStageConfig(StageConfig):
     update_chunk_prompts: int | None = None
     # Held-out arithmetic prompts scored greedily every ``eval_every`` steps.
     eval_prompts: int = 0
+    # Start from this kept SFT step instead of the final SFT checkpoint.
+    init_step: int | None = None
 
 
 @dataclass(frozen=True)
@@ -274,6 +278,9 @@ class EvalConfig:
     # Held-out arithmetic buckets, each operand uniform in [0, 10**d). The RL gain
     # gate scores the hardest bucket; the easiest guards against regressions.
     arithmetic_digits: list[int] = field(default_factory=lambda: [2])
+    # When > 0, also report sampled pass@1 and pass@k (GRPO sampling settings) on
+    # the hardest bucket: the gap is the headroom RL can close.
+    pass_k: int = 0
     max_new_tokens: int = 128
     budget_usd: float = 0.0
 

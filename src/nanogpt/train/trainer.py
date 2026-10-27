@@ -90,6 +90,18 @@ def finished_checkpoint(paths: RunPaths, stage: str) -> Path:
     return paths.checkpoints(stage) / str(status["checkpoint"])
 
 
+def parent_checkpoint(paths: RunPaths, stage: str, step: int | None = None) -> Path:
+    """A finished stage's final checkpoint, or one of its kept intermediate steps."""
+
+    final = finished_checkpoint(paths, stage)
+    if step is None:
+        return final
+    chosen = paths.checkpoints(stage) / f"step_{step:06d}"
+    if not (chosen / "model.safetensors").is_file():
+        raise FileNotFoundError(f"no kept {stage} checkpoint at step {step}: {chosen}")
+    return chosen
+
+
 def latest_checkpoint(directory: Path) -> Path | None:
     steps = sorted(path for path in directory.glob("step_*") if path.is_dir())
     return steps[-1] if steps else None

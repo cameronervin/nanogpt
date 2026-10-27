@@ -9,7 +9,8 @@ dtype: bfloat16
 compile: true
 deterministic: false
 # Each gpt_100m checkpoint is ~1.2 GB (weights + AdamW state); keep the newest two.
-keep_checkpoints: 2
+# 0 keeps every SFT step checkpoint, so GRPO can start from one (grpo.init_step).
+keep_checkpoints: 0
 
 budget:
   hourly_rate_usd: null
@@ -57,8 +58,9 @@ sft:
   warmup_fraction: 0.03
   weight_decay: 0.01
   log_every: 10
-  eval_every: 100
-  checkpoint_every: 500
+  eval_every: 250
+  checkpoint_every: 250
+  eval_prompts: 200              # held-out 2-digit greedy accuracy at each eval
   budget_usd: 5.0
   sources:
     - kind: smoltalk
@@ -68,28 +70,27 @@ sft:
       license: apache-2.0
     - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 4500, license: MIT}
     # Carry-step answers: a bare sum is one BPE token, which GRPO could not improve.
-    # 2-digit-only SFT scored 0% on 3-digit sums (each 3-digit operand is one unseen
-    # BPE token), so a quarter of the arithmetic is 3-digit: enough for partial
-    # 3-digit accuracy that GRPO can then improve.
-    - {kind: arithmetic, examples: 150000, seed: 18001, answer_format: carry}
-    - {kind: arithmetic, examples: 50000, seed: 18002, answer_format: carry, min_digits: 3, max_digits: 3}
+    # Deliberately few examples (~2.5k seen in 2000 steps): 150k+ saturated 2- and
+    # 3-digit sums at 100%, leaving GRPO nothing to learn. A weak SFT keeps pass@1
+    # partial while pass@8 is higher, and GRPO's job is to close that gap.
+    - {kind: arithmetic, examples: 4000, seed: 18001, answer_format: carry}
 
 grpo:
-  max_steps: 500
-  micro_batch_size: 16           # prompts per optimizer step
-  learning_rate: 0.000005
+  max_steps: 300
+  micro_batch_size: 64           # prompts per optimizer step; 16 was too noisy
+  learning_rate: 0.000001
   min_lr_fraction: 1.0
   weight_decay: 0.0
   log_every: 1
   checkpoint_every: 50
-  eval_every: 50
+  eval_every: 25
   eval_prompts: 200
   budget_usd: 10.0
   # Arithmetic only: GSM8K prompts almost never earned a reward from this model,
   # so their groups had zero variance and only halved the useful batch.
-  # 3-digit sums: 2-digit ones are saturated after SFT (99% correct, no mixed groups).
+  # 2-digit sums, where the weak SFT is partly right.
   sources:
-    - {kind: arithmetic, examples: 8000, seed: 28001, min_digits: 3, max_digits: 3}
+    - {kind: arithmetic, examples: 20000, seed: 28001}
   group_size: 8
   temperature: 0.8
   top_k: 50
@@ -105,7 +106,8 @@ grpo:
 eval:
   validation_batches: 50
   reasoning_prompts: 500
-  arithmetic_digits: [2, 3]
+  arithmetic_digits: [2]
+  pass_k: 8
   max_new_tokens: 256
   budget_usd: 3.0
 
