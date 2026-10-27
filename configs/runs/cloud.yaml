@@ -67,7 +67,8 @@ sft:
       examples: 200000
       license: apache-2.0
     - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 4500, license: MIT}
-    - {kind: arithmetic, examples: 200000, seed: 18001}
+    # Carry-step answers: a bare sum is one BPE token, which GRPO could not improve.
+    - {kind: arithmetic, examples: 200000, seed: 18001, answer_format: carry}
 
 grpo:
   max_steps: 500

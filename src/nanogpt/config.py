@@ -206,6 +206,9 @@ class SourceConfig:
     revision: str | None = None
     subsets: list[str] = field(default_factory=list)
     license: str | None = None
+    # Arithmetic SFT answers: "direct" is just <final>sum</final>; "carry" first
+    # works column by column with space-separated digits (see ``carry_steps``).
+    answer_format: Literal["direct", "carry"] = "direct"
 
 
 @dataclass(frozen=True)
