@@ -363,7 +363,9 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
 
     def evaluate() -> dict[str, float]:
         model.eval()
-        metrics = chat_reasoning_eval(model, tokenizer, held_out, max_new_tokens=32)
+        metrics = chat_reasoning_eval(
+            model, tokenizer, held_out, max_new_tokens=config.max_new_tokens
+        )
         return {f"heldout_{key}": value for key, value in metrics.items()}
 
     trainer = Trainer(
