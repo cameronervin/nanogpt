@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from fractions import Fraction
 
 import pytest
@@ -17,6 +18,7 @@ from nanogpt.train.grpo import (
     grpo_update,
     reward_density,
     rollout_log_probs,
+    sequence_log_probs,
 )
 
 
@@ -161,3 +163,70 @@ def test_rollout_masks_only_completion_tokens_and_reference_stays_frozen() -> No
         completion_mask=rollout.completion_mask,
     )
     assert all(parameter.grad is None for parameter in reference.parameters())
+
+
+def test_chunked_grpo_update_matches_single_pass() -> None:
+    torch.manual_seed(0)
+    tokenizer = ByteBPETokenizer()
+    config = ModelConfig(
+        vocab_size=tokenizer.vocab_size,
+        max_seq_len=128,
+        n_layers=1,
+        d_model=32,
+        n_query_heads=4,
+        n_kv_heads=2,
+        ffn_hidden_size=64,
+    )
+    policy = GPT(config)
+    reference = copy.deepcopy(policy).requires_grad_(False)
+    rollout = collect_rollout(
+        policy,
+        tokenizer,
+        list(arithmetic_prompts(3)),
+        group_size=3,
+        max_new_tokens=5,
+        temperature=1.0,
+        top_k=None,
+        seed=0,
+    )
+    # Group 0 is uniform (skipped); groups 1 and 2 are mixed.
+    rewards = torch.tensor([[1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]])
+    old = rollout_log_probs(policy, rollout)
+    assert torch.allclose(rollout_log_probs(policy, rollout, chunk_prompts=2), old)
+    ref = rollout_log_probs(reference, rollout)
+
+    results, states = [], []
+    for chunk in (None, 1):
+        model = copy.deepcopy(policy)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        results.append(
+            grpo_update(
+                model=model,
+                optimizer=optimizer,
+                input_ids=rollout.input_ids,
+                target_ids=rollout.target_ids,
+                old_log_probs=old,
+                reference_log_probs=ref,
+                rewards=rewards,
+                completion_mask=rollout.completion_mask,
+                chunk_prompts=chunk,
+            )
+        )
+        states.append([parameter.detach().clone() for parameter in model.parameters()])
+    single, chunked = results
+    for field in ("loss", "policy_loss", "kl", "clip_fraction", "valid_group_fraction"):
+        assert torch.allclose(getattr(single, field), getattr(chunked, field), atol=1e-6)
+    for a, b in zip(*states, strict=True):
+        assert torch.allclose(a, b, atol=1e-6)
+
+
+def test_rollout_log_probs_use_the_sampling_temperature() -> None:
+    torch.manual_seed(0)
+    logits = torch.randn(2, 3, 11)
+    targets = torch.randint(0, 11, (2, 3))
+    cold = sequence_log_probs(logits, targets, temperature=0.5)
+    expected = (logits / 0.5).log_softmax(-1).gather(-1, targets[..., None]).squeeze(-1)
+    assert torch.allclose(cold, expected)
+    assert not torch.allclose(cold, sequence_log_probs(logits, targets))
+    with pytest.raises(ValueError, match="temperature"):
+        sequence_log_probs(logits, targets, temperature=0.0)
