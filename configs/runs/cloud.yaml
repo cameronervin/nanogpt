@@ -90,6 +90,8 @@ grpo:
   pilot_prompts: 128
   min_correct_fraction: 0.05
   min_mixed_group_fraction: 0.2
+  # 16 prompts x 8 samples x ~500 tokens of 32k-vocab logits in one pass OOMed a 44 GB A40.
+  update_chunk_prompts: 4
 
 eval:
   validation_batches: 50
