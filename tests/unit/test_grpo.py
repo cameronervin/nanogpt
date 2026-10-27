@@ -12,10 +12,12 @@ from nanogpt.model import GPT
 from nanogpt.rewards import numeric_exact_reward, parse_numeric_answer
 from nanogpt.tokenizer import ByteBPETokenizer
 from nanogpt.train.grpo import (
+    RewardDensity,
     collect_rollout,
     group_advantages,
     grpo_loss,
     grpo_update,
+    pilot_gate_error,
     reward_density,
     rollout_log_probs,
     sequence_log_probs,
@@ -230,3 +232,12 @@ def test_rollout_log_probs_use_the_sampling_temperature() -> None:
     assert not torch.allclose(cold, sequence_log_probs(logits, targets))
     with pytest.raises(ValueError, match="temperature"):
         sequence_log_probs(logits, targets, temperature=0.0)
+
+
+def test_pilot_gate_error_names_saturated_and_sparse_rewards() -> None:
+    def check(correct: float, mixed: float) -> str | None:
+        return pilot_gate_error(RewardDensity(correct, mixed), min_correct=0.05, min_mixed=0.2)
+
+    assert check(0.4, 0.5) is None
+    assert "saturated" in (check(0.994, 0.047) or "")
+    assert "too sparse" in (check(0.013, 0.094) or "")
