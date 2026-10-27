@@ -172,6 +172,7 @@ class ReleaseGates:
     base_loss_finite: bool
     sft_format_rate_at_least_95pct: bool
     rl_exact_match_gain_at_least_10pts: bool
+    rl_no_regression_on_easiest_bucket: bool
     within_budget: bool
 
     @property
@@ -186,12 +187,19 @@ def build_report(
     grpo: Mapping[str, float],
     run: Mapping[str, float],
 ) -> dict[str, object]:
-    """Build and gate the base/SFT/GRPO comparison."""
+    """Build and gate the base/SFT/GRPO comparison.
 
+    ``exact_match`` is the hardest arithmetic bucket; ``easiest_exact_match``
+    (when present) is the easiest, which RL may not lower by more than 2 points.
+    """
+
+    easiest = "easiest_exact_match"
     gates = ReleaseGates(
         base_loss_finite=math.isfinite(base["loss"]),
         sft_format_rate_at_least_95pct=sft["format_valid_rate"] >= 0.95,
         rl_exact_match_gain_at_least_10pts=grpo["exact_match"] - sft["exact_match"] >= 0.10,
+        rl_no_regression_on_easiest_bucket=grpo.get(easiest, grpo["exact_match"])
+        >= sft.get(easiest, sft["exact_match"]) - 0.02,
         within_budget=run["estimated_cost_usd"] <= run["budget_usd"],
     )
     return {
@@ -228,7 +236,17 @@ def run_eval(ctx: RunContext) -> dict[str, object]:
     config = ctx.config
     tokenizer = load_tokenizer(ctx.paths.tokenizer)
     # A seed never used by any training source: held-out numbers and order.
-    held_out = list(arithmetic_prompts(config.eval.reasoning_prompts, seed=987_654))
+    buckets = sorted(set(config.eval.arithmetic_digits))
+    if not buckets:
+        raise ValueError("eval.arithmetic_digits must name at least one bucket")
+    held_out = {
+        digits: list(
+            arithmetic_prompts(
+                config.eval.reasoning_prompts, seed=987_654, min_digits=1, max_digits=digits
+            )
+        )
+        for digits in buckets
+    }
     results: dict[str, dict[str, float]] = {}
     cost = 0.0
     for stage in ("base", "sft", "grpo"):
@@ -256,9 +274,21 @@ def run_eval(ctx: RunContext) -> dict[str, object]:
                 key: float(value) for key, value in asdict(metrics).items() if value is not None
             }
         else:
-            results[stage] = chat_reasoning_eval(
-                model, tokenizer, held_out, max_new_tokens=config.eval.max_new_tokens
-            )
+            per_bucket = {
+                digits: chat_reasoning_eval(
+                    model, tokenizer, prompts, max_new_tokens=config.eval.max_new_tokens
+                )
+                for digits, prompts in held_out.items()
+            }
+            results[stage] = {
+                **per_bucket[buckets[-1]],
+                "easiest_exact_match": per_bucket[buckets[0]]["exact_match"],
+                **{
+                    f"d{digits}_{key}": value
+                    for digits, metrics in per_bucket.items()
+                    for key, value in metrics.items()
+                },
+            }
     report = build_report(
         base=results["base"],
         sft=results["sft"],
