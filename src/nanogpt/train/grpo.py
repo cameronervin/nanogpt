@@ -151,31 +151,66 @@ def grpo_update(
     epsilon: float = 0.2,
     beta: float = 0.02,
     grad_clip: float = 1.0,
+    chunk_prompts: int | None = None,
 ) -> GRPOLoss:
-    """Perform one optimizer epoch over a fresh, already-collected rollout."""
+    """Perform one optimizer epoch over a fresh, already-collected rollout.
+
+    ``chunk_prompts`` bounds peak memory: the policy forward/backward runs over
+    that many prompt groups at a time and gradients accumulate. Each chunk's
+    token-mean loss is weighted by its share of valid tokens, so the update
+    equals the single-pass one.
+    """
 
     prompts, completions, tokens = input_ids.shape
-    flat_inputs = input_ids.reshape(prompts * completions, tokens)
-    output = model(flat_inputs)
-    if output.logits is None:
-        raise RuntimeError("policy forward did not return logits")
-    flat_targets = target_ids.reshape(prompts * completions, tokens)
-    new_log_probs = sequence_log_probs(output.logits, flat_targets).reshape_as(input_ids)
-    objective = grpo_loss(
-        new_log_probs,
-        old_log_probs,
-        reference_log_probs,
-        rewards,
-        completion_mask,
-        epsilon=epsilon,
-        beta=beta,
-    )
+    size = chunk_prompts or prompts
+    if size <= 0:
+        raise ValueError("chunk_prompts must be positive")
+    _, valid_groups = group_advantages(rewards)
+    valid_tokens = completion_mask.bool() & valid_groups[:, None, None]
+    total = int(valid_tokens.sum())
     optimizer.zero_grad(set_to_none=True)
-    if float(objective.valid_group_fraction) == 0.0:
+    parts: list[tuple[float, GRPOLoss]] = []
+    for start in range(0, prompts, size):
+        chunk = slice(start, start + size)
+        chunk_inputs = input_ids[chunk]
+        rows = chunk_inputs.size(0) * completions
+        output = model(chunk_inputs.reshape(rows, tokens))
+        if output.logits is None:
+            raise RuntimeError("policy forward did not return logits")
+        new_log_probs = sequence_log_probs(
+            output.logits, target_ids[chunk].reshape(rows, tokens)
+        ).reshape_as(chunk_inputs)
+        part = grpo_loss(
+            new_log_probs,
+            old_log_probs[chunk],
+            reference_log_probs[chunk],
+            rewards[chunk],
+            completion_mask[chunk],
+            epsilon=epsilon,
+            beta=beta,
+        )
+        weight = int(valid_tokens[chunk].sum()) / total if total else 0.0
+        if weight:
+            (part.loss * weight).backward()  # type: ignore[no-untyped-call]
+        parts.append((weight, part))
+
+    def combine(field: str) -> Tensor:
+        return sum(
+            (weight * getattr(part, field).detach() for weight, part in parts),
+            torch.zeros((), device=input_ids.device),
+        )
+
+    objective = GRPOLoss(
+        combine("loss"),
+        combine("policy_loss"),
+        combine("kl"),
+        combine("clip_fraction"),
+        valid_groups.float().mean(),
+    )
+    if total == 0:
         # A skipped rollout must not invoke AdamW: even zero gradients would
         # otherwise update parameters through decoupled weight decay.
         return objective
-    objective.loss.backward()  # type: ignore[no-untyped-call]
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     if not math.isfinite(float(norm)):
         raise FloatingPointError("GRPO gradient norm became non-finite")
@@ -266,12 +301,18 @@ def collect_rollout(
 
 
 @torch.inference_mode()
-def rollout_log_probs(model: torch.nn.Module, rollout: Rollout) -> Tensor:
-    flat_inputs = rollout.input_ids.flatten(0, 1)
-    logits = model(flat_inputs).logits
-    return sequence_log_probs(logits, rollout.target_ids.flatten(0, 1)).reshape_as(
-        rollout.input_ids
-    )
+def rollout_log_probs(
+    model: torch.nn.Module, rollout: Rollout, *, chunk_prompts: int | None = None
+) -> Tensor:
+    prompts = rollout.input_ids.size(0)
+    size = chunk_prompts or prompts
+    pieces = []
+    for start in range(0, prompts, size):
+        inputs = rollout.input_ids[start : start + size]
+        logits = model(inputs.flatten(0, 1)).logits
+        targets = rollout.target_ids[start : start + size].flatten(0, 1)
+        pieces.append(sequence_log_probs(logits, targets).reshape_as(inputs))
+    return torch.cat(pieces)
 
 
 # --------------------------------------------------------------------------- stage
@@ -359,8 +400,9 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
             prompts[(start + offset) % len(prompts)] for offset in range(config.micro_batch_size)
         ]
         rollout = rollout_for(trainer.step, batch)
-        old = rollout_log_probs(model, rollout)
-        ref = rollout_log_probs(reference, rollout)
+        chunk = config.update_chunk_prompts
+        old = rollout_log_probs(model, rollout, chunk_prompts=chunk)
+        ref = rollout_log_probs(reference, rollout, chunk_prompts=chunk)
         with ctx.autocast():
             result = grpo_update(
                 model=trainer.forward_model,
@@ -374,6 +416,7 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
                 epsilon=config.ratio_clip_epsilon,
                 beta=config.reference_kl_beta,
                 grad_clip=config.grad_clip,
+                chunk_prompts=chunk,
             )
         return {
             "loss": float(result.loss.detach()),

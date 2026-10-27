@@ -250,6 +250,8 @@ class GRPOStageConfig(StageConfig):
     pilot_prompts: int = 128
     min_correct_fraction: float = 0.05
     min_mixed_group_fraction: float = 0.2
+    # Prompt groups per policy forward/backward; None runs the whole batch at once.
+    update_chunk_prompts: int | None = None
 
 
 @dataclass(frozen=True)
