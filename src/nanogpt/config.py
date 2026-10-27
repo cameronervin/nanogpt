@@ -209,6 +209,14 @@ class SourceConfig:
     # Arithmetic SFT answers: "direct" is just <final>sum</final>; "carry" first
     # works column by column with space-separated digits (see ``carry_steps``).
     answer_format: Literal["direct", "carry"] = "direct"
+    # Arithmetic operands are drawn uniformly from [10**(min_digits-1), 10**max_digits)
+    # (from 0 when min_digits is 1); the defaults are the original 0-99 range.
+    min_digits: int = 1
+    max_digits: int = 2
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.min_digits <= self.max_digits <= 9:
+            raise ValueError("source digits must satisfy 1 <= min_digits <= max_digits <= 9")
 
 
 @dataclass(frozen=True)
@@ -263,6 +271,9 @@ class GRPOStageConfig(StageConfig):
 class EvalConfig:
     validation_batches: int = 20
     reasoning_prompts: int = 200
+    # Held-out arithmetic buckets, each operand uniform in [0, 10**d). The RL gain
+    # gate scores the hardest bucket; the easiest guards against regressions.
+    arithmetic_digits: list[int] = field(default_factory=lambda: [2])
     max_new_tokens: int = 128
     budget_usd: float = 0.0
 

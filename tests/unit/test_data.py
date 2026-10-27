@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import random
+import re
+
 import pytest
 import torch
 
@@ -9,6 +12,7 @@ from nanogpt.data.schemas import ConversationRecord, FineWebRecord
 from nanogpt.data.shards import TokenLoader, prepare_shards
 from nanogpt.data.sources import (
     arithmetic_conversations,
+    arithmetic_prompts,
     assign_split,
     carry_steps,
     conversations,
@@ -140,3 +144,35 @@ def test_arithmetic_answer_format_is_configurable() -> None:
     assert carry.messages[1]["content"].startswith("ones: ")
     with pytest.raises(ValueError, match="answer format"):
         next(arithmetic_conversations(1, answer_format="words"))
+
+
+def test_carry_steps_are_correct_for_long_sums() -> None:
+    rng = random.Random(0)
+    for _ in range(2000):
+        left, right = rng.randint(0, 999_999), rng.randint(0, 999_999)
+        text = carry_steps(left, right)
+        assert numeric_exact_reward(text, left + right) == 1.0
+        assert "column" not in text
+
+
+def _operands(prompt_text: str) -> tuple[int, int]:
+    match = re.match(r"What is (\d+) \+ (\d+)\?", prompt_text)
+    assert match is not None
+    return int(match.group(1)), int(match.group(2))
+
+
+def test_default_arithmetic_digits_reproduce_the_original_prompts() -> None:
+    rng = random.Random(23)
+    for prompt in arithmetic_prompts(50, seed=23):
+        expected = rng.randint(0, 99), rng.randint(0, 99)
+        assert _operands(prompt.messages[0]["content"]) == expected
+        assert prompt.answer == str(sum(expected))
+
+
+def test_arithmetic_digit_range_is_respected() -> None:
+    source = SourceConfig(kind="arithmetic", examples=200, seed=5, min_digits=3, max_digits=4)
+    operands = [_operands(record.messages[0]["content"]) for record in conversations([source])]
+    assert all(100 <= value <= 9_999 for pair in operands for value in pair)
+    assert any(left >= 1_000 for left, _ in operands)
+    with pytest.raises(ValueError, match="digits"):
+        SourceConfig(kind="arithmetic", examples=1, min_digits=3, max_digits=2)
