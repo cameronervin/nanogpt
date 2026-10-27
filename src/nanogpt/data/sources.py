@@ -81,7 +81,20 @@ def fixture_documents() -> list[FineWebRecord]:
     return documents
 
 
-_COLUMNS = ("ones", "tens", "hundreds", "thousands")
+_COLUMNS = (
+    "ones",
+    "tens",
+    "hundreds",
+    "thousands",
+    "ten thousands",
+    "hundred thousands",
+    "millions",
+)
+
+
+def _operand(rng: random.Random, min_digits: int, max_digits: int) -> int:
+    low = 0 if min_digits == 1 else 10 ** (min_digits - 1)
+    return rng.randint(low, 10**max_digits - 1)
 
 
 def carry_steps(left: int, right: int) -> str:
@@ -118,13 +131,19 @@ def carry_steps(left: int, right: int) -> str:
 
 
 def arithmetic_conversations(
-    count: int, *, seed: int = 17, answer_format: str = "direct"
+    count: int,
+    *,
+    seed: int = 17,
+    answer_format: str = "direct",
+    min_digits: int = 1,
+    max_digits: int = 2,
 ) -> Iterator[ConversationRecord]:
     if answer_format not in ("direct", "carry"):
         raise ValueError(f"unknown arithmetic answer format: {answer_format!r}")
     rng = random.Random(seed)
     for index in range(count):
-        left, right = rng.randint(0, 99), rng.randint(0, 99)
+        left = _operand(rng, min_digits, max_digits)
+        right = _operand(rng, min_digits, max_digits)
         answer = (
             carry_steps(left, right)
             if answer_format == "carry"
@@ -141,10 +160,13 @@ def arithmetic_conversations(
         )
 
 
-def arithmetic_prompts(count: int, *, seed: int = 23) -> Iterator[GRPOPrompt]:
+def arithmetic_prompts(
+    count: int, *, seed: int = 23, min_digits: int = 1, max_digits: int = 2
+) -> Iterator[GRPOPrompt]:
     rng = random.Random(seed)
     for index in range(count):
-        left, right = rng.randint(0, 99), rng.randint(0, 99)
+        left = _operand(rng, min_digits, max_digits)
+        right = _operand(rng, min_digits, max_digits)
         yield GRPOPrompt(
             id=f"arithmetic-grpo-{seed}-{index}",
             messages=(
@@ -263,7 +285,11 @@ def conversations(sources: Iterable[SourceConfig]) -> list[ConversationRecord]:
         stream: Iterable[ConversationRecord]
         if source.kind == "arithmetic":
             stream = arithmetic_conversations(
-                source.examples, seed=source.seed, answer_format=source.answer_format
+                source.examples,
+                seed=source.seed,
+                answer_format=source.answer_format,
+                min_digits=source.min_digits,
+                max_digits=source.max_digits,
             )
         elif source.kind == "gsm8k":
             stream = (
@@ -295,7 +321,12 @@ def prompts(sources: Iterable[SourceConfig]) -> list[GRPOPrompt]:
     for source in sources:
         stream: Iterable[GRPOPrompt]
         if source.kind == "arithmetic":
-            stream = arithmetic_prompts(source.examples, seed=source.seed)
+            stream = arithmetic_prompts(
+                source.examples,
+                seed=source.seed,
+                min_digits=source.min_digits,
+                max_digits=source.max_digits,
+            )
         elif source.kind == "gsm8k":
             stream = (
                 GRPOPrompt(

@@ -127,6 +127,23 @@ class RewardDensity:
         return self.correct_fraction >= 0.05 and self.mixed_group_fraction >= 0.20
 
 
+def pilot_gate_error(density: RewardDensity, *, min_correct: float, min_mixed: float) -> str | None:
+    """Explain why the pilot rollout is unfit for GRPO, or None if it passes.
+
+    Too few mixed groups means no learning signal either way: when most samples
+    are already right the prompts are too easy, otherwise SFT is too weak.
+    """
+
+    if density.correct_fraction >= min_correct and density.mixed_group_fraction >= min_mixed:
+        return None
+    observed = (
+        f"(correct {density.correct_fraction:.1%}, mixed groups {density.mixed_group_fraction:.1%})"
+    )
+    if density.correct_fraction >= 0.5:
+        return f"GRPO pilot reward is saturated {observed}; use harder prompts for RL"
+    return f"GRPO pilot reward is too sparse {observed}; strengthen SFT before spending on RL"
+
+
 def reward_density(rewards: Tensor) -> RewardDensity:
     _, valid = group_advantages(rewards)
     return RewardDensity(float(rewards.float().mean()), float(valid.float().mean()))
@@ -358,8 +375,17 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
     # The reference is the frozen SFT policy: eval mode, no gradients, ever.
     reference = copy.deepcopy(model).to(ctx.device).eval().requires_grad_(False)
     # Held-out greedy accuracy during training, on a seed no source or the final
-    # eval uses, so a run that degrades the SFT policy is visible early.
-    held_out = list(arithmetic_prompts(config.eval_prompts, seed=424_242))
+    # eval uses, so a run that degrades the SFT policy is visible early. Operands
+    # match the first arithmetic source, i.e. the difficulty RL is training on.
+    arithmetic = next((source for source in config.sources if source.kind == "arithmetic"), None)
+    held_out = list(
+        arithmetic_prompts(
+            config.eval_prompts,
+            seed=424_242,
+            min_digits=arithmetic.min_digits if arithmetic else 1,
+            max_digits=arithmetic.max_digits if arithmetic else 2,
+        )
+    )
 
     def evaluate() -> dict[str, float]:
         model.eval()
@@ -411,15 +437,13 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
                 "mixed_group_fraction": density.mixed_group_fraction,
             }
         )
-        if (
-            density.correct_fraction < config.min_correct_fraction
-            or density.mixed_group_fraction < config.min_mixed_group_fraction
-        ):
-            raise RuntimeError(
-                "GRPO pilot reward is too sparse "
-                f"(correct {density.correct_fraction:.1%}, mixed groups "
-                f"{density.mixed_group_fraction:.1%}); strengthen SFT before spending on RL"
-            )
+        error = pilot_gate_error(
+            density,
+            min_correct=config.min_correct_fraction,
+            min_mixed=config.min_mixed_group_fraction,
+        )
+        if error is not None:
+            raise RuntimeError(error)
 
     def step(lr: float) -> dict[str, float]:
         trainer.set_learning_rate(lr)

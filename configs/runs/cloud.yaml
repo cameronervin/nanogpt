@@ -68,7 +68,11 @@ sft:
       license: apache-2.0
     - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 4500, license: MIT}
     # Carry-step answers: a bare sum is one BPE token, which GRPO could not improve.
-    - {kind: arithmetic, examples: 200000, seed: 18001, answer_format: carry}
+    # 2-digit-only SFT scored 0% on 3-digit sums (each 3-digit operand is one unseen
+    # BPE token), so a quarter of the arithmetic is 3-digit: enough for partial
+    # 3-digit accuracy that GRPO can then improve.
+    - {kind: arithmetic, examples: 150000, seed: 18001, answer_format: carry}
+    - {kind: arithmetic, examples: 50000, seed: 18002, answer_format: carry, min_digits: 3, max_digits: 3}
 
 grpo:
   max_steps: 500
@@ -83,8 +87,9 @@ grpo:
   budget_usd: 10.0
   # Arithmetic only: GSM8K prompts almost never earned a reward from this model,
   # so their groups had zero variance and only halved the useful batch.
+  # 3-digit sums: 2-digit ones are saturated after SFT (99% correct, no mixed groups).
   sources:
-    - {kind: arithmetic, examples: 8000, seed: 28001}
+    - {kind: arithmetic, examples: 8000, seed: 28001, min_digits: 3, max_digits: 3}
   group_size: 8
   temperature: 0.8
   top_k: 50
@@ -100,6 +105,7 @@ grpo:
 eval:
   validation_batches: 50
   reasoning_prompts: 500
+  arithmetic_digits: [2, 3]
   max_new_tokens: 256
   budget_usd: 3.0
 
