@@ -8,7 +8,8 @@ from typing import Any
 
 from nanogpt.data.chat import TokenBatch, collate_sft
 from nanogpt.data.schemas import ConversationRecord
-from nanogpt.evaluate import evaluate_language_model
+from nanogpt.data.sources import arithmetic_prompts
+from nanogpt.evaluate import chat_reasoning_eval, evaluate_language_model
 from nanogpt.model.gpt import GPT
 from nanogpt.tokenizer import load_tokenizer
 from nanogpt.train.checkpoint import load_checkpoint, read_manifest
@@ -52,6 +53,9 @@ def run_sft(ctx: RunContext, *, resume: bool = False) -> TrainResult:
     def load_state(state: dict[str, Any]) -> None:
         cursor["next"] = int(state["next"])
 
+    # Same held-out seed as GRPO, so the SFT curve and the RL curve line up.
+    held_out = list(arithmetic_prompts(config.eval_prompts, seed=424_242))
+
     def evaluate() -> dict[str, float]:
         size = config.micro_batch_size
         batches = [
@@ -59,7 +63,12 @@ def run_sft(ctx: RunContext, *, resume: bool = False) -> TrainResult:
             for i in range(0, len(validation), size)
         ]
         metrics = evaluate_language_model(model, batches, device=ctx.device)
-        return {"val_assistant_loss": metrics.loss}
+        results = {"val_assistant_loss": metrics.loss}
+        if held_out:
+            model.eval()
+            arithmetic = chat_reasoning_eval(model, tokenizer, held_out, max_new_tokens=128)
+            results["heldout_exact_match"] = arithmetic["exact_match"]
+        return results
 
     trainer = Trainer(
         ctx,
