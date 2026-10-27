@@ -18,6 +18,8 @@ import torch
 from torch import Tensor
 
 from nanogpt.data.schemas import GRPOPrompt
+from nanogpt.data.sources import arithmetic_prompts
+from nanogpt.evaluate import chat_reasoning_eval
 from nanogpt.generate import sample_chat
 from nanogpt.model.gpt import GPT
 from nanogpt.rewards import numeric_exact_reward, parse_numeric_answer
@@ -130,12 +132,19 @@ def reward_density(rewards: Tensor) -> RewardDensity:
     return RewardDensity(float(rewards.float().mean()), float(valid.float().mean()))
 
 
-def sequence_log_probs(logits: Tensor, target_ids: Tensor) -> Tensor:
-    """Gather target token log probabilities from ``[..., vocab]`` logits."""
+def sequence_log_probs(logits: Tensor, target_ids: Tensor, *, temperature: float = 1.0) -> Tensor:
+    """Gather target token log probabilities from ``[..., vocab]`` logits.
+
+    ``temperature`` should match the rollout sampler so the ratio and KL are
+    taken under the distribution the completions were actually drawn from.
+    """
 
     if logits.shape[:-1] != target_ids.shape:
         raise ValueError("target IDs must match all non-vocabulary dimensions")
-    return logits.float().log_softmax(dim=-1).gather(-1, target_ids[..., None]).squeeze(-1)
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    scaled = logits.float() / temperature
+    return scaled.log_softmax(dim=-1).gather(-1, target_ids[..., None]).squeeze(-1)
 
 
 def grpo_update(
@@ -152,6 +161,7 @@ def grpo_update(
     beta: float = 0.02,
     grad_clip: float = 1.0,
     chunk_prompts: int | None = None,
+    temperature: float = 1.0,
 ) -> GRPOLoss:
     """Perform one optimizer epoch over a fresh, already-collected rollout.
 
@@ -178,7 +188,7 @@ def grpo_update(
         if output.logits is None:
             raise RuntimeError("policy forward did not return logits")
         new_log_probs = sequence_log_probs(
-            output.logits, target_ids[chunk].reshape(rows, tokens)
+            output.logits, target_ids[chunk].reshape(rows, tokens), temperature=temperature
         ).reshape_as(chunk_inputs)
         part = grpo_loss(
             new_log_probs,
@@ -302,7 +312,11 @@ def collect_rollout(
 
 @torch.inference_mode()
 def rollout_log_probs(
-    model: torch.nn.Module, rollout: Rollout, *, chunk_prompts: int | None = None
+    model: torch.nn.Module,
+    rollout: Rollout,
+    *,
+    chunk_prompts: int | None = None,
+    temperature: float = 1.0,
 ) -> Tensor:
     prompts = rollout.input_ids.size(0)
     size = chunk_prompts or prompts
@@ -311,7 +325,9 @@ def rollout_log_probs(
         inputs = rollout.input_ids[start : start + size]
         logits = model(inputs.flatten(0, 1)).logits
         targets = rollout.target_ids[start : start + size].flatten(0, 1)
-        pieces.append(sequence_log_probs(logits, targets).reshape_as(inputs))
+        pieces.append(
+            sequence_log_probs(logits, targets, temperature=temperature).reshape_as(inputs)
+        )
     return torch.cat(pieces)
 
 
@@ -341,11 +357,21 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
     )
     # The reference is the frozen SFT policy: eval mode, no gradients, ever.
     reference = copy.deepcopy(model).to(ctx.device).eval().requires_grad_(False)
+    # Held-out greedy accuracy during training, on a seed no source or the final
+    # eval uses, so a run that degrades the SFT policy is visible early.
+    held_out = list(arithmetic_prompts(config.eval_prompts, seed=424_242))
+
+    def evaluate() -> dict[str, float]:
+        model.eval()
+        metrics = chat_reasoning_eval(model, tokenizer, held_out, max_new_tokens=32)
+        return {f"heldout_{key}": value for key, value in metrics.items()}
+
     trainer = Trainer(
         ctx,
         "grpo",
         config,
         model,
+        evaluate=evaluate if held_out else None,
         lineage={
             "parent_model_sha256": read_manifest(parent)["model_sha256"],
             "tokenizer_sha256": tokenizer.sha256,
@@ -401,9 +427,15 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
         ]
         rollout = rollout_for(trainer.step, batch)
         chunk = config.update_chunk_prompts
-        old = rollout_log_probs(model, rollout, chunk_prompts=chunk)
-        ref = rollout_log_probs(reference, rollout, chunk_prompts=chunk)
         with ctx.autocast():
+            # Same precision as the update below: an fp32 old/reference against a
+            # bf16 policy makes the ratio and KL carry rounding noise, not drift.
+            old = rollout_log_probs(
+                model, rollout, chunk_prompts=chunk, temperature=config.temperature
+            )
+            ref = rollout_log_probs(
+                reference, rollout, chunk_prompts=chunk, temperature=config.temperature
+            )
             result = grpo_update(
                 model=trainer.forward_model,
                 optimizer=trainer.optimizer,
@@ -417,6 +449,7 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
                 beta=config.reference_kl_beta,
                 grad_clip=config.grad_clip,
                 chunk_prompts=chunk,
+                temperature=config.temperature,
             )
         return {
             "loss": float(result.loss.detach()),

@@ -77,10 +77,13 @@ grpo:
   weight_decay: 0.0
   log_every: 1
   checkpoint_every: 50
+  eval_every: 50
+  eval_prompts: 200
   budget_usd: 10.0
+  # Arithmetic only: GSM8K prompts almost never earned a reward from this model,
+  # so their groups had zero variance and only halved the useful batch.
   sources:
-    - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 3000}
-    - {kind: arithmetic, examples: 3000, seed: 28001}
+    - {kind: arithmetic, examples: 8000, seed: 28001}
   group_size: 8
   temperature: 0.8
   top_k: 50
