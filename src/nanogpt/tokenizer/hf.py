@@ -69,6 +69,9 @@ class HFTokenizer:
         if list(self.special_to_id.values()) != list(range(len(RESERVED_TOKENS))):
             raise ValueError("reserved tokens must occupy IDs 0..6 in contract order")
         self.id_to_special = {index: token for token, index in self.special_to_id.items()}
+        # Cached: the Rust ``get_vocab_size`` rebuilds the whole vocab map per call,
+        # and ``decode`` checks the size once per token.
+        self._vocab_size = int(rust.get_vocab_size())
 
     @classmethod
     def train(
@@ -107,7 +110,7 @@ class HFTokenizer:
 
     @property
     def vocab_size(self) -> int:
-        return int(self._rust.get_vocab_size())
+        return self._vocab_size
 
     @property
     def sha256(self) -> str:

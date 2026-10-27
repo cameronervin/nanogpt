@@ -42,6 +42,29 @@ def test_reserved_strings_in_user_text_are_not_special(backend: str) -> None:
     assert rendered == "<|user|>hi"
 
 
+def test_hf_decode_does_not_query_the_vocab_per_token(monkeypatch) -> None:
+    tokenizer = train_tokenizer("hf", CORPUS, vocab_size=300, max_chars=10_000)
+    ids = tokenizer.encode(TEXT) * 50
+    calls = 0
+    original = type(tokenizer._rust).get_vocab_size
+
+    class Counting:
+        def __init__(self, rust) -> None:
+            self._rust = rust
+
+        def get_vocab_size(self, *args, **kwargs) -> int:
+            nonlocal calls
+            calls += 1
+            return original(self._rust, *args, **kwargs)
+
+        def __getattr__(self, name: str):
+            return getattr(self._rust, name)
+
+    monkeypatch.setattr(tokenizer, "_rust", Counting(tokenizer._rust))
+    assert tokenizer.decode(ids) == TEXT * 50
+    assert calls == 0
+
+
 def test_tampered_manifests_are_rejected(tmp_path) -> None:
     reference = ByteBPETokenizer.train(CORPUS, vocab_size=280)
     reference.save(tmp_path / "ref")

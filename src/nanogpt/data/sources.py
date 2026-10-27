@@ -81,15 +81,60 @@ def fixture_documents() -> list[FineWebRecord]:
     return documents
 
 
-def arithmetic_conversations(count: int, *, seed: int = 17) -> Iterator[ConversationRecord]:
+_COLUMNS = ("ones", "tens", "hundreds", "thousands")
+
+
+def carry_steps(left: int, right: int) -> str:
+    """Column-by-column addition with every digit its own token.
+
+    BPE merges a digit run such as ``127`` into one token, which makes the sum
+    a single lookup with no intermediate signal. Spacing the digits keeps each
+    column's arithmetic (and the final digit sequence) visible to the model.
+    """
+
+    if left < 0 or right < 0:
+        raise ValueError("carry_steps supports non-negative operands")
+    a, b = str(left)[::-1], str(right)[::-1]
+    lines, digits, carry = [], [], 0
+    for column in range(max(len(a), len(b))):
+        x = int(a[column]) if column < len(a) else 0
+        y = int(b[column]) if column < len(b) else 0
+        total = x + y + carry
+        name = _COLUMNS[column] if column < len(_COLUMNS) else f"column {column + 1}"
+        terms = f"{x} + {y}" + (f" + {carry}" if carry else "")
+        written = " ".join(str(total))
+        carry, digit = divmod(total, 10)
+        lines.append(
+            f"{name}: {terms} = {written}, write {digit}" + (f" carry {carry}" if carry else "")
+        )
+        digits.append(str(digit))
+    if carry:
+        name = _COLUMNS[len(digits)] if len(digits) < len(_COLUMNS) else "carry"
+        lines.append(f"{name}: carry {carry}, write {carry}")
+        digits.append(str(carry))
+    answer = "".join(reversed(digits)).lstrip("0") or "0"
+    lines.append(f"digits: {' '.join(answer)}")
+    return "\n".join(lines) + f"\n<final>{answer}</final>"
+
+
+def arithmetic_conversations(
+    count: int, *, seed: int = 17, answer_format: str = "direct"
+) -> Iterator[ConversationRecord]:
+    if answer_format not in ("direct", "carry"):
+        raise ValueError(f"unknown arithmetic answer format: {answer_format!r}")
     rng = random.Random(seed)
     for index in range(count):
         left, right = rng.randint(0, 99), rng.randint(0, 99)
+        answer = (
+            carry_steps(left, right)
+            if answer_format == "carry"
+            else f"<final>{left + right}</final>"
+        )
         yield ConversationRecord(
             id=f"arithmetic-sft-{seed}-{index}",
             messages=(
                 {"role": "user", "content": f"What is {left} + {right}? {ANSWER_INSTRUCTION}"},
-                {"role": "assistant", "content": f"<final>{left + right}</final>"},
+                {"role": "assistant", "content": answer},
             ),
             source="nanogpt-arithmetic",
             license="CC0-1.0",
@@ -217,7 +262,9 @@ def conversations(sources: Iterable[SourceConfig]) -> list[ConversationRecord]:
     for source in sources:
         stream: Iterable[ConversationRecord]
         if source.kind == "arithmetic":
-            stream = arithmetic_conversations(source.examples, seed=source.seed)
+            stream = arithmetic_conversations(
+                source.examples, seed=source.seed, answer_format=source.answer_format
+            )
         elif source.kind == "gsm8k":
             stream = (
                 ConversationRecord(

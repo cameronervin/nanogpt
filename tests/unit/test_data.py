@@ -10,10 +10,12 @@ from nanogpt.data.shards import TokenLoader, prepare_shards
 from nanogpt.data.sources import (
     arithmetic_conversations,
     assign_split,
+    carry_steps,
     conversations,
     gsm8k_partition,
     require_allowlisted,
 )
+from nanogpt.rewards import numeric_exact_reward
 from nanogpt.tokenizer import ByteBPETokenizer
 
 
@@ -113,3 +115,28 @@ def test_allowlist_splits_and_source_mixture() -> None:
     assert {gsm8k_partition(f"gsm8k-train-{i}") for i in range(50)} == {"sft", "grpo"}
     mixture = conversations([SourceConfig(kind="arithmetic", examples=7, seed=3)])
     assert len(mixture) == 7
+
+
+def test_carry_steps_are_correct_for_every_two_digit_sum() -> None:
+    for left in range(100):
+        for right in range(100):
+            text = carry_steps(left, right)
+            assert numeric_exact_reward(text, left + right) == 1.0
+            digits = text.split("digits: ")[1].split("\n")[0]
+            assert digits == " ".join(str(left + right))
+    assert carry_steps(49, 27).splitlines()[:2] == [
+        "ones: 9 + 7 = 1 6, write 6 carry 1",
+        "tens: 4 + 2 + 1 = 7, write 7",
+    ]
+
+
+def test_arithmetic_answer_format_is_configurable() -> None:
+    (direct,) = conversations([SourceConfig(kind="arithmetic", examples=1, seed=3)])
+    (carry,) = conversations(
+        [SourceConfig(kind="arithmetic", examples=1, seed=3, answer_format="carry")]
+    )
+    assert direct.messages[0] == carry.messages[0]
+    assert direct.messages[1]["content"].startswith("<final>")
+    assert carry.messages[1]["content"].startswith("ones: ")
+    with pytest.raises(ValueError, match="answer format"):
+        next(arithmetic_conversations(1, answer_format="words"))

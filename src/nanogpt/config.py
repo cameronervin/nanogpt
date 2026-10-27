@@ -206,6 +206,9 @@ class SourceConfig:
     revision: str | None = None
     subsets: list[str] = field(default_factory=list)
     license: str | None = None
+    # Arithmetic SFT answers: "direct" is just <final>sum</final>; "carry" first
+    # works column by column with space-separated digits (see ``carry_steps``).
+    answer_format: Literal["direct", "carry"] = "direct"
 
 
 @dataclass(frozen=True)
@@ -250,6 +253,10 @@ class GRPOStageConfig(StageConfig):
     pilot_prompts: int = 128
     min_correct_fraction: float = 0.05
     min_mixed_group_fraction: float = 0.2
+    # Prompt groups per policy forward/backward; None runs the whole batch at once.
+    update_chunk_prompts: int | None = None
+    # Held-out arithmetic prompts scored greedily every ``eval_every`` steps.
+    eval_prompts: int = 0
 
 
 @dataclass(frozen=True)
