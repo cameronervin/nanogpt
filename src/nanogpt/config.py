@@ -252,6 +252,8 @@ class GRPOStageConfig(StageConfig):
     min_mixed_group_fraction: float = 0.2
     # Prompt groups per policy forward/backward; None runs the whole batch at once.
     update_chunk_prompts: int | None = None
+    # Held-out arithmetic prompts scored greedily every ``eval_every`` steps.
+    eval_prompts: int = 0
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,7 @@ from nanogpt.train.grpo import (
     grpo_update,
     reward_density,
     rollout_log_probs,
+    sequence_log_probs,
 )
 
 
@@ -217,3 +218,15 @@ def test_chunked_grpo_update_matches_single_pass() -> None:
         assert torch.allclose(getattr(single, field), getattr(chunked, field), atol=1e-6)
     for a, b in zip(*states, strict=True):
         assert torch.allclose(a, b, atol=1e-6)
+
+
+def test_rollout_log_probs_use_the_sampling_temperature() -> None:
+    torch.manual_seed(0)
+    logits = torch.randn(2, 3, 11)
+    targets = torch.randint(0, 11, (2, 3))
+    cold = sequence_log_probs(logits, targets, temperature=0.5)
+    expected = (logits / 0.5).log_softmax(-1).gather(-1, targets[..., None]).squeeze(-1)
+    assert torch.allclose(cold, expected)
+    assert not torch.allclose(cold, sequence_log_probs(logits, targets))
+    with pytest.raises(ValueError, match="temperature"):
+        sequence_log_probs(logits, targets, temperature=0.0)
