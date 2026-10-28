@@ -6,11 +6,10 @@ This document reports the first full cloud run of this repo:
 - supervised fine-tuning (SFT) on chat and arithmetic data;
 - reinforcement learning with GRPO on verifiable arithmetic rewards.
 
-The total cost was about $26 of rented GPU time, against a $100 cap.
+Total cost: about $26 of GPU time and storage, against a $100 cap.
 
-The arithmetic task is deliberately small: 2-digit addition with a written
-carry procedure. It is small enough to run cheaply and verify exactly, and
-large enough to show each stage working.
+The RL task is 2-digit addition with a written carry procedure. Answers can
+be checked exactly, and a run costs a few dollars.
 
 On 500 held-out prompts:
 
@@ -48,7 +47,7 @@ parent, so each result traces back to its data and config. See
 | Architecture | 12 layers, width 768, GQA (12 query / 4 KV heads), RoPE, SwiGLU, RMSNorm |
 | Parameters | 101M |
 | Data | FineWeb-Edu `sample-10BT`, 2,000,158,720 tokens |
-| Steps | 7,630 on one H100 SXM, 480k tokens/s |
+| Steps | 7,630 on one H100 SXM (probe: 480k tokens/s) |
 | Validation loss | 3.250 (perplexity 25.8, 1.019 bits/byte) |
 
 The throughput probe projected the base stage at $5.54. It came in at
@@ -60,11 +59,11 @@ The SFT and GRPO arithmetic data ask questions of the form
 `What is 47 + 38? End with <final>answer</final>.`
 
 The first SFT runs trained the model to answer with the bare sum. The
-byte-level BPE tokenizer merges a number such as `85` into a single token,
-so the whole answer was one prediction with no intermediate steps. That
-version reached 30% held-out accuracy. GRPO and plain supervised updates on
-arithmetic both lowered it, so the problem was the answer format, not the RL
-algorithm.
+byte-level BPE tokenizer stores most numbers, such as `85`, as one token, so
+the answer was a single prediction with no intermediate steps. The better of
+these runs reached 30% held-out accuracy. GRPO lowered it to 10%. A control
+run with plain supervised updates on correct answers also lowered it, so the
+drop was not specific to GRPO. The likely cause is the single-token answer.
 
 The carry format writes the sum column by column, with every digit as its
 own token:
@@ -76,8 +75,8 @@ digits: 8 5
 <final>85</final>
 ```
 
-With this format, SFT learns 2-digit addition reliably. Each column is a
-small, local step, and a wrong answer is usually wrong in one column.
+Each column is a small step the model can learn on its own. With 200k
+carry-format examples, SFT reached 100% on held-out 2-digit sums.
 
 ## What GRPO needs to learn
 
@@ -86,11 +85,12 @@ final number is right, 0 if not. Each answer's advantage is its score minus
 the group mean, normalized by the group's spread. The policy then moves
 toward the above-average answers.
 
-This only gives a signal when a group is **mixed**, with some right and some
-wrong answers. Groups that are all right or all wrong have zero advantage
-everywhere. So GRPO can raise single-sample accuracy (pass@1) only toward
-what the model can already reach in several tries (pass@k). The gap between
-the two is the room GRPO has to work with.
+Only **mixed** groups, with some right and some wrong answers, give a
+signal. Groups that are all right or all wrong have zero advantage. So GRPO
+learns from prompts the model solves some of the time. Two numbers measure
+this: sampled pass@1, the chance one sample is right, and pass@k, the chance
+at least one of k samples is right. A large gap between them means many
+mixed groups.
 
 The repo checks this before training. The GRPO pilot samples 128 prompts and
 stops the stage unless:
@@ -98,25 +98,29 @@ stops the stage unless:
 - at least 5% of samples are correct;
 - at least 20% of groups are mixed.
 
-Earlier runs hit both failure modes:
+Earlier carry-format models failed this check in both directions:
 
-| SFT data | Held-out greedy | Pilot result |
-| --- | ---: | --- |
-| 200k carry-format sums | 100% | 99.4% correct, 4.7% mixed groups: saturated, stopped |
-| Same model on 3- to 5-digit sums | 0% | No correct samples: no signal |
+| Model and prompts | Greedy | Sampled correct | Mixed groups |
+| --- | ---: | ---: | ---: |
+| 2-digit SFT (200k sums), 2-digit prompts | 100% | 99.4% | 4.7% |
+| 2- and 3-digit SFT, 3-digit prompts | 100% | 96.5% | 14% |
+| Either model, 4- and 5-digit prompts | 0% | 0% | 0% |
+
+Accuracy was all or nothing by operand length, so no prompt set gave enough
+mixed groups.
 
 ## Setting the SFT data budget
 
-The final run sets the SFT data so that the model ends in the useful range.
-SFT mixes SmolTalk chat and GSM8K with 4,000 carry-format sums. Over 2,000
-steps the model sees about 2,500 of those sums.
+The final run sets the amount of arithmetic SFT data so the model ends
+partly right. SFT mixes SmolTalk chat and GSM8K with 4,000 carry-format sums.
+At 64 examples per step for 2,000 steps, the model sees about 2,500 sums.
 
 SFT logs held-out accuracy every 250 steps, so the curve is visible during
 training:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/sft-heldout-dark.svg">
-  <img alt="SFT held-out exact match by step: 0% until step 500, 7% at step 1000, 34% at step 2000." src="assets/sft-heldout-light.svg">
+  <img alt="SFT held-out exact match by step: under 2% through step 750, 7% at step 1000, 34% at step 2000." src="assets/sft-heldout-light.svg">
 </picture>
 
 Before any GRPO spend, a go/no-go check ran on 500 held-out prompts:
@@ -127,9 +131,10 @@ Before any GRPO spend, a go/no-go check ran on 500 held-out prompts:
 | pass@8 minus sampled pass@1 | at least 20 points | 35 points (44% vs 8.7%) |
 | Mixed groups | at least 20% | 44% |
 
-All three passed. The config also supports starting GRPO from an
-intermediate SFT checkpoint (`grpo.init_step`), as a fallback if the final
-checkpoint had been too accurate.
+All three passed. If the final checkpoint had been too accurate, GRPO could
+have started from an earlier one with `grpo.init_step`. (This check and the
+final eval use different sampling seeds, so their sampled numbers differ
+slightly.)
 
 ## GRPO
 
@@ -141,9 +146,9 @@ prompts × 8 samples per step and KL weight 0.02.
 | 1e-6 | 35% / 36% / 43.5% | 0.010 |
 | 3e-6 | 22.5% / 28% / 41% | 0.020 |
 
-The higher rate first fell below the SFT baseline. The full run used 1e-6
-for 150 steps. Its pilot found 9.8% correct samples and 48% mixed groups,
-well above the thresholds.
+The higher rate stayed below the 34% SFT baseline for the first 40 steps.
+The full run used 1e-6 for 150 steps. Its pilot found 9.8% correct samples
+and 48% mixed groups.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/grpo-heldout-dark.svg">
@@ -152,7 +157,7 @@ well above the thresholds.
 
 | | Start | Step 150 |
 | --- | ---: | ---: |
-| Mean training reward | 0.10 | 0.19 |
+| Correct training samples | 9.8% (pilot) | 19.3% (one batch) |
 | KL to the SFT reference | 0 | 0.014 |
 | Held-out greedy (200 prompts) | 34% | 43% |
 
@@ -177,9 +182,8 @@ uses greedy decoding plus 8 samples per prompt at the GRPO sampling settings
 | Mixed groups | 48.4% | 63.6% |
 | Format valid | 100% | 100% |
 
-Sampled pass@1 doubled. pass@8 rose too, by 15 points. Within 150 steps,
-GRPO did more than turn the best of 8 samples into the first one: it widened
-the set of prompts the model can solve at all.
+Sampled pass@1 doubled. pass@8 also rose, by 15 points: after GRPO, more
+prompts get at least one correct answer in 8 samples.
 
 Release gates in `eval/report.json`:
 
@@ -209,8 +213,8 @@ size.
 
 ## Limitations
 
-- The task is 2-digit addition. Accuracy drops to 0% on lengths the model
-  never saw in training, because each multi-digit operand is a single token.
+- The task is 2-digit addition. Accuracy is 0% on operand lengths not seen
+  in training, likely because each multi-digit operand is one token.
 - 46.6% greedy accuracy is far from solved. This run shows the pipeline and
   method working, not a capable arithmetic model.
 - Held-out prompts use different random seeds but the same operand range as
@@ -220,15 +224,18 @@ size.
 
 ## Next steps
 
-- **Digit-spaced prompts.** Write operands as `4 7 + 3 8`, so the model sees
-  single-digit tokens and can attempt lengths it was not trained on. That
-  gives GRPO a partly solved bucket (4 to 5 digits) to work on.
+- **Digit-spaced prompts.** Write operands as `4 7 + 3 8`, so every digit is
+  its own token. If the model then solves some longer sums, GRPO has a partly
+  solved set to train on.
 - **Longer GRPO.** Held-out accuracy and pass@8 were both still rising at
   step 150.
 - **CLI checks.** Move the go/no-go check and the learning-rate sweep from
   [`scripts/experiments/`](../scripts/experiments) into `nanogpt` commands.
 
 ## Reproduce
+
+With the base checkpoint and prepared data in place (see the
+[runbook](runbook.md)):
 
 ```bash
 export NANOGPT_HOME=/workspace/artifacts NANOGPT_HOURLY_RATE_USD=<price>
