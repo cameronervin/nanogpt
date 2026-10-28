@@ -25,7 +25,7 @@ from nanogpt.model.gpt import GPT
 from nanogpt.rewards import numeric_exact_reward, parse_numeric_answer
 from nanogpt.tokenizer import Tokenizer, load_tokenizer
 from nanogpt.train.checkpoint import load_checkpoint, read_manifest
-from nanogpt.train.trainer import RunContext, Trainer, TrainResult, finished_checkpoint
+from nanogpt.train.trainer import RunContext, Trainer, TrainResult, parent_checkpoint
 from nanogpt.utils import sha256_file
 
 
@@ -147,6 +147,12 @@ def pilot_gate_error(density: RewardDensity, *, min_correct: float, min_mixed: f
 def reward_density(rewards: Tensor) -> RewardDensity:
     _, valid = group_advantages(rewards)
     return RewardDensity(float(rewards.float().mean()), float(valid.float().mean()))
+
+
+def pass_at_k(rewards: Tensor) -> float:
+    """Fraction of prompts with at least one correct sample in their group."""
+
+    return float((rewards.amax(dim=-1) > 0).float().mean())
 
 
 def sequence_log_probs(logits: Tensor, target_ids: Tensor, *, temperature: float = 1.0) -> Tensor:
@@ -348,6 +354,43 @@ def rollout_log_probs(
     return torch.cat(pieces)
 
 
+@torch.inference_mode()
+def sampled_pass_at_k(
+    model: GPT,
+    tokenizer: Tokenizer,
+    prompts: list[GRPOPrompt],
+    *,
+    k: int,
+    temperature: float,
+    top_k: int | None,
+    max_new_tokens: int,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Sampled pass@1 and pass@k: GRPO can at most lift the first toward the second."""
+
+    was_training = model.training
+    model.eval()
+    try:
+        rollout = collect_rollout(
+            model,
+            tokenizer,
+            prompts,
+            group_size=k,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            seed=seed,
+        )
+    finally:
+        model.train(was_training)
+    density = reward_density(rollout.rewards)
+    return {
+        "pass1_sampled": density.correct_fraction,
+        "pass_at_k": pass_at_k(rollout.rewards),
+        "mixed_group_fraction": density.mixed_group_fraction,
+    }
+
+
 # --------------------------------------------------------------------------- stage
 
 
@@ -366,7 +409,7 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
     tokenizer = load_tokenizer(ctx.paths.tokenizer)
     prompt_path = ctx.paths.data("grpo") / "train.jsonl"
     prompts = _read_prompts(prompt_path)
-    parent = finished_checkpoint(ctx.paths, "sft")
+    parent = parent_checkpoint(ctx.paths, "sft", config.init_step)
 
     model = GPT(ctx.model_config)
     load_checkpoint(
@@ -435,6 +478,7 @@ def run_grpo(ctx: RunContext, *, resume: bool = False) -> TrainResult:
                 "step": 0,
                 "correct_fraction": density.correct_fraction,
                 "mixed_group_fraction": density.mixed_group_fraction,
+                "pass_at_k": pass_at_k(pilot.rewards),
             }
         )
         error = pilot_gate_error(
