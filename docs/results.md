@@ -28,12 +28,12 @@ weights are on Hugging Face at
 
 ```mermaid
 flowchart LR
-    D["FineWeb-Edu<br/>2.0B tokens"] --> B["Base pretraining<br/>7,630 steps · H100<br/>~$4.85"]
-    B --> S["SFT<br/>2,000 steps · A40<br/>~$1.50"]
-    C["SmolTalk + GSM8K<br/>+ 4k carry-format sums"] --> S
-    S --> G["GRPO<br/>150 steps · A40<br/>$1.11"]
-    P["2-digit addition prompts<br/>exact numeric reward"] --> G
-    G --> E["Eval report<br/>release gates"]
+    D["FineWeb-Edu<br/>2.0B tokens"] --> B["Base<br/>H100 · ~$4.85"]
+    B --> S["SFT<br/>A40 · ~$1.50"]
+    C["SmolTalk, GSM8K,<br/>4k carry sums"] --> S
+    S --> G["GRPO<br/>A40 · $1.11"]
+    P["2-digit sums,<br/>exact reward"] --> G
+    G --> E["Eval report"]
 ```
 
 Every stage writes checksummed checkpoints and a manifest that names its
@@ -142,7 +142,8 @@ prompts × 8 samples per step and KL weight 0.02.
 | 3e-6 | 22.5% / 28% / 41% | 0.020 |
 
 The higher rate first fell below the SFT baseline. The full run used 1e-6
-for 150 steps:
+for 150 steps. Its pilot found 9.8% correct samples and 48% mixed groups,
+well above the thresholds.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/grpo-heldout-dark.svg">
@@ -151,7 +152,6 @@ for 150 steps:
 
 | | Start | Step 150 |
 | --- | ---: | ---: |
-| Pilot: correct samples / mixed groups | 9.8% / 48% | |
 | Mean training reward | 0.10 | 0.19 |
 | KL to the SFT reference | 0 | 0.014 |
 | Held-out greedy (200 prompts) | 34% | 43% |
