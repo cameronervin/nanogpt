@@ -24,27 +24,34 @@
 - Real-data rehearsal (`configs/runs/rehearsal.yaml`). The FineWeb, GSM8K and
   SmolTalk adapters are verified at their pinned revisions, and preparation
   throughput is measured (see the runbook).
+- First cloud run, base through GRPO, for about $26
+  ([results](results.md)).
+- Carry-format arithmetic answers (one digit per token) and configurable
+  operand lengths.
+- Sampled pass@k in the GRPO pilot and the eval report, held-out arithmetic
+  accuracy during SFT, and `grpo.init_step` to start GRPO from an
+  intermediate SFT checkpoint.
 
 ## Next
 
-1. **First real run.** Prepare data on a CPU instance (see the runbook), then
-   run `nanogpt probe` on the target GPU and launch.
-2. **Faster shard preparation.** Overlap streaming with encoding and encode in
+1. **Digit-spaced prompts.** Write operands as `4 7 + 3 8` so the model can
+   attempt lengths it was not trained on, and run GRPO on the partly solved
+   lengths.
+2. **Longer GRPO.** Held-out accuracy and pass@8 were still rising at step
+   150 of the first run.
+3. **Go/no-go and sweep as commands.** Fold `scripts/experiments/` into the
+   CLI: `nanogpt check grpo` for the pass@k gate and a short learning-rate
+   sweep.
+4. **Faster shard preparation.** Overlap streaming with encoding and encode in
    several processes. Put the data stage under the budget guard like the
    training stages.
-3. **Multi-GPU (DDP).** `TokenLoader` already partitions by rank. Still
+5. **Multi-GPU (DDP).** `TokenLoader` already partitions by rank. Still
    needed: process-group setup, `DistributedDataParallel` wrapping after
    compile, rank-0-only checkpoints and logs, and reduced metrics.
-4. **SFT efficiency.** Length-bucket or pack conversations to cut padding,
+6. **SFT efficiency.** Length-bucket or pack conversations to cut padding,
    and sample the mixture by assistant tokens rather than by example count.
-5. **GRPO throughput.** Batch rollouts across prompts with left padding
-   instead of generating one prompt group at a time. Add a token-entropy
-   metric.
-6. **Pilot fallback.** Add one bounded synthetic-arithmetic SFT warmup when
-   the GRPO reward-density gate fails, then re-run the pilot.
-7. **Evaluation.** Add GSM8K test pass@1 and sampled pass@k. Add MFU and
-   peak-memory logging. Make held-out arithmetic disjoint by construction
-   (the training generators currently draw from the same operand range).
+7. **Evaluation.** Add GSM8K test pass@1, MFU and peak-memory logging. Make
+   held-out arithmetic disjoint from training by construction.
 8. **Contamination study** before quoting any benchmark number.
 
 ## Non-goals (v1)
