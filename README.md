@@ -42,6 +42,23 @@ NANOGPT_HOURLY_RATE_USD=2.99 ./scripts/cloud.sh             # dry run: prints th
 NANOGPT_HOURLY_RATE_USD=2.99 ./scripts/cloud.sh --execute   # probe, confirm, then run
 ```
 
+## Results
+
+The first cloud run trained `gpt_100m` (101M parameters) through all three
+stages for about $26. Base pretraining on 2B FineWeb-Edu tokens reached a
+validation perplexity of 25.8. On 500 held-out 2-digit addition prompts,
+GRPO raised accuracy over its SFT starting point:
+
+| Metric | SFT | GRPO |
+| --- | ---: | ---: |
+| Greedy exact match | 32.0% | 46.6% |
+| Sampled pass@1 (T = 0.8) | 9.3% | 19.0% |
+| Sampled pass@8 | 48.6% | 63.8% |
+
+The full write-up, with training curves and costs, is in
+[docs/results.md](docs/results.md). The weights are at
+[huggingface.co/cameronervin1/nanogpt-100m](https://huggingface.co/cameronervin1/nanogpt-100m).
+
 ## Layout
 
 ```text
@@ -49,7 +66,8 @@ configs/models/   architecture profiles (nano, tiny, gpt_50m, gpt_100m)
 configs/runs/     one self-contained file per run (smoke, cloud)
 src/nanogpt/      config · model/ · tokenizer/ · data/ · train/ · generate · rewards · evaluate · cli
 tests/            unit/ and integration/ (includes the full smoke pipeline)
-docs/             design.md · runbook.md · roadmap.md
+docs/             design.md · runbook.md · roadmap.md · results.md
+scripts/          smoke and cloud launchers; experiments/ holds the GRPO go/no-go check and sweep
 ```
 
 ## Development
@@ -66,6 +84,7 @@ uv run pytest
   checkpoints, evaluation.
 - [Runbook](docs/runbook.md): smoke run, cloud budget, resume, shutdown,
   troubleshooting.
+- [Results](docs/results.md): the first cloud run, from base to GRPO.
 - [Roadmap](docs/roadmap.md): what is done and what comes next.
 
 ## License and data notice

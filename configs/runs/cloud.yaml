@@ -70,9 +70,9 @@ sft:
       license: apache-2.0
     - {kind: gsm8k, revision: 740312add88f781978c0658806c59bc2815b9866, examples: 4500, license: MIT}
     # Carry-step answers: a bare sum is one BPE token, which GRPO could not improve.
-    # Deliberately few examples (~2.5k seen in 2000 steps): 150k+ saturated 2- and
-    # 3-digit sums at 100%, leaving GRPO nothing to learn. A weak SFT keeps pass@1
-    # partial while pass@8 is higher, and GRPO's job is to close that gap.
+    # The data budget sets where SFT ends (~2.5k sums seen in 2000 steps). 150k+
+    # examples took 2- and 3-digit sums to 100%, leaving GRPO no mixed groups.
+    # At this budget pass@1 is partial and pass@8 is well above it: room for GRPO.
     - {kind: arithmetic, examples: 4000, seed: 18001, answer_format: carry}
 
 grpo:
@@ -88,7 +88,7 @@ grpo:
   budget_usd: 10.0
   # Arithmetic only: GSM8K prompts almost never earned a reward from this model,
   # so their groups had zero variance and only halved the useful batch.
-  # 2-digit sums, where the weak SFT is partly right.
+  # 2-digit sums, where SFT is partly right.
   sources:
     - {kind: arithmetic, examples: 20000, seed: 28001}
   group_size: 8
