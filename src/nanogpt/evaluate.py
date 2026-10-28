@@ -231,7 +231,8 @@ def run_eval(ctx: RunContext) -> dict[str, object]:
     from nanogpt.data.sources import arithmetic_prompts
     from nanogpt.tokenizer import load_tokenizer
     from nanogpt.train.checkpoint import load_checkpoint, read_manifest
-    from nanogpt.train.trainer import finished_checkpoint
+    from nanogpt.train.grpo import sampled_pass_at_k
+    from nanogpt.train.trainer import finished_checkpoint, parent_checkpoint
 
     config = ctx.config
     tokenizer = load_tokenizer(ctx.paths.tokenizer)
@@ -250,11 +251,15 @@ def run_eval(ctx: RunContext) -> dict[str, object]:
     results: dict[str, dict[str, float]] = {}
     cost = 0.0
     for stage in ("base", "sft", "grpo"):
-        checkpoint = finished_checkpoint(ctx.paths, stage)
+        final = finished_checkpoint(ctx.paths, stage)
+        # SFT is scored at the checkpoint GRPO actually started from.
+        checkpoint = (
+            parent_checkpoint(ctx.paths, stage, config.grpo.init_step) if stage == "sft" else final
+        )
         model = GPT(ctx.model_config)
         load_checkpoint(checkpoint, model=model, restore_rng=False)
         model.to(ctx.device).eval()
-        cost += float(read_manifest(checkpoint)["estimated_cost_usd"])  # type: ignore[arg-type]
+        cost += float(read_manifest(final)["estimated_cost_usd"])  # type: ignore[arg-type]
         if stage == "base":
             loader = TokenLoader(
                 ctx.paths.data("base"),
@@ -289,6 +294,18 @@ def run_eval(ctx: RunContext) -> dict[str, object]:
                     for key, value in metrics.items()
                 },
             }
+            if config.eval.pass_k:
+                results[stage].update(
+                    sampled_pass_at_k(
+                        model,
+                        tokenizer,
+                        held_out[buckets[-1]],
+                        k=config.eval.pass_k,
+                        temperature=config.grpo.temperature,
+                        top_k=config.grpo.top_k,
+                        max_new_tokens=config.eval.max_new_tokens,
+                    )
+                )
     report = build_report(
         base=results["base"],
         sft=results["sft"],

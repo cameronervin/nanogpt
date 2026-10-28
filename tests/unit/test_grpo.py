@@ -17,9 +17,11 @@ from nanogpt.train.grpo import (
     group_advantages,
     grpo_loss,
     grpo_update,
+    pass_at_k,
     pilot_gate_error,
     reward_density,
     rollout_log_probs,
+    sampled_pass_at_k,
     sequence_log_probs,
 )
 
@@ -241,3 +243,35 @@ def test_pilot_gate_error_names_saturated_and_sparse_rewards() -> None:
     assert check(0.4, 0.5) is None
     assert "saturated" in (check(0.994, 0.047) or "")
     assert "too sparse" in (check(0.013, 0.094) or "")
+
+
+def test_pass_at_k_counts_prompts_with_any_correct_sample() -> None:
+    rewards = torch.tensor([[0.0, 1.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+    assert pass_at_k(rewards) == pytest.approx(2 / 3)
+
+
+def test_sampled_pass_at_k_bounds_and_restores_mode() -> None:
+    torch.manual_seed(0)
+    tokenizer = ByteBPETokenizer()
+    config = ModelConfig(
+        vocab_size=tokenizer.vocab_size,
+        max_seq_len=128,
+        n_layers=1,
+        d_model=32,
+        n_query_heads=4,
+        n_kv_heads=2,
+        ffn_hidden_size=64,
+    )
+    model = GPT(config).train()
+    metrics = sampled_pass_at_k(
+        model,
+        tokenizer,
+        list(arithmetic_prompts(3)),
+        k=4,
+        temperature=1.0,
+        top_k=None,
+        max_new_tokens=5,
+    )
+    assert 0.0 <= metrics["pass1_sampled"] <= metrics["pass_at_k"] <= 1.0
+    assert set(metrics) == {"pass1_sampled", "pass_at_k", "mixed_group_fraction"}
+    assert model.training

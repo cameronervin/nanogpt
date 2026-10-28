@@ -16,7 +16,7 @@ from nanogpt.model import GPT
 from nanogpt.train.budget import BudgetExceeded, BudgetGuard, project_cost_usd, select_profile
 from nanogpt.train.checkpoint import CheckpointCompatibilityError, load_checkpoint, save_checkpoint
 from nanogpt.train.optim import cosine_lr
-from nanogpt.train.trainer import RunContext, Trainer, stage_status
+from nanogpt.train.trainer import RunContext, Trainer, parent_checkpoint, stage_status
 from nanogpt.utils import seed_everything
 
 SMOKE = Path(__file__).parents[2] / "configs" / "runs" / "smoke.yaml"
@@ -243,3 +243,15 @@ def test_stage_compile_overrides_run_setting(tmp_path, monkeypatch) -> None:
     ctx.config = dataclasses.replace(ctx.config, compile=True)
     _trainer(ctx, _Stream())
     assert len(compiled) == 1  # stage inherits the run setting
+
+
+def test_parent_checkpoint_selects_a_kept_step(tmp_path) -> None:
+    ctx = _context(tmp_path, checkpoint_every=1)
+    stream = _Stream()
+    trainer = _trainer(ctx, stream)
+    trainer.fit(trainer.lm_step(stream.next_batch))
+    final = ctx.paths.checkpoints("base") / "step_000006"
+    assert parent_checkpoint(ctx.paths, "base") == final
+    assert parent_checkpoint(ctx.paths, "base", 3).name == "step_000003"
+    with pytest.raises(FileNotFoundError, match="step 99"):
+        parent_checkpoint(ctx.paths, "base", 99)
